@@ -1,3 +1,3 @@
 VM_NAME=${VM_NAME:-win10ltsc}
 
-sudo virsh start $VM_NAME
+sudo virsh start $VM_NAME && echo "VM started"
