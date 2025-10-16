@@ -7,7 +7,7 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-echo -e "${GREEN}=== VM Windows 10 Tiny Installation Script for Debian 11 ===${NC}\n"
+echo -e "${GREEN}=== VM Windows 10 LTSC Installation Script for Debian 11 ===${NC}\n"
 
 # Function for cleanup and exit
 cleanup_and_exit() {
@@ -150,8 +150,8 @@ read -p "Swap size in GB (default: 4): " SWAP_SIZE
 SWAP_SIZE=${SWAP_SIZE:-4}
 
 echo -e "\n${YELLOW}Virtual Machine Configuration:${NC}"
-read -p "VM name (default: win10tiny): " VM_NAME
-VM_NAME=${VM_NAME:-win10tiny}
+read -p "VM name (default: win10ltsc): " VM_NAME
+VM_NAME=${VM_NAME:-win10ltsc}
 
 read -p "RAM in MB (default: 2048): " RAM_SIZE
 RAM_SIZE=${RAM_SIZE:-2048}
@@ -225,17 +225,26 @@ echo -e "${YELLOW}[3/9] Checking KVM modules...${NC}"
 lsmod | grep kvm
 
 # Download ISO
-echo -e "${YELLOW}[4/9] Downloading Windows 10 Tiny ISO...${NC}"
+echo -e "${YELLOW}[4/9] Downloading Windows 10 LTSC 2021 ISO...${NC}"
 sudo mkdir -p /var/lib/libvirt/boot
 cd /var/lib/libvirt/boot
-if [ ! -f "Windows10-Tiny.iso" ]; then
-    sudo wget -O Windows10-Tiny.iso "https://archive.org/download/windows-10-tiny-b-4-x-64/Windows%2010%20%28Tiny%29.iso"
+if [ ! -f "Windows10-LTSC.iso" ]; then
+    echo "Downloading Windows 10 LTSC 64-bit (this may take a while)..."
+    sudo wget -O Windows10-LTSC.iso "https://archive.org/download/windows-10-ltsc-2021/windows%2010%20LTSC%2064.iso"
+    
+    # Verify download
+    if [ $? -eq 0 ] && [ -f "Windows10-LTSC.iso" ]; then
+        echo -e "${GREEN}✓ Download completed successfully${NC}"
+    else
+        echo -e "${RED}✗ Download failed!${NC}"
+        cleanup_and_exit
+    fi
 else
     echo "ISO already exists, skipping download."
 fi
 
-ls -lh Windows10-Tiny.iso
-file Windows10-Tiny.iso
+ls -lh Windows10-LTSC.iso
+file Windows10-LTSC.iso
 
 # Create disk image
 echo -e "${YELLOW}[5/9] Creating ${DISK_SIZE}G disk image...${NC}"
@@ -271,7 +280,7 @@ sudo virt-install \
   --name ${VM_NAME} \
   --ram ${RAM_SIZE} \
   --vcpus ${VCPU_COUNT} \
-  --cdrom /var/lib/libvirt/boot/Windows10-Tiny.iso \
+  --cdrom /var/lib/libvirt/boot/Windows10-LTSC.iso \
   --disk path=/var/lib/libvirt/images/${VM_NAME}.img,size=${DISK_SIZE} \
   --os-variant win10 \
   --network network=default \
