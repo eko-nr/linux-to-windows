@@ -10,3 +10,9 @@ Get-Service TermService
 
 Start-Service TermService
 Set-Service TermService -StartupType Automatic
+
+
+# Accept
+sudo iptables -t nat -A PREROUTING -p tcp --dport 3389 -j DNAT --to-destination <VM_IP>:3389
+sudo iptables -A FORWARD -p tcp -d <VM_IP> --dport 3389 -j ACCEPT
+
