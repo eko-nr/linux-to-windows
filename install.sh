@@ -277,6 +277,7 @@ sudo virt-install \
   --network network=default \
   --graphics vnc,listen=0.0.0.0,port=${VNC_PORT} \
   --boot cdrom,hd,menu=on \
+  --check path_in_use=off \
   --noautoconsole
 
 # Access info
