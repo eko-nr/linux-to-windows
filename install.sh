@@ -165,22 +165,6 @@ DISK_SIZE=${DISK_SIZE:-40}
 read -p "VNC port (default: 5901): " VNC_PORT
 VNC_PORT=${VNC_PORT:-5901}
 
-echo -e "\n${YELLOW}Storage Driver Configuration:${NC}"
-echo "1. IDE - Compatible, works immediately (recommended for easy setup)"
-echo "2. VirtIO - Better performance, requires driver loading during install"
-read -p "Choose storage driver (1 or 2, default: 1): " STORAGE_CHOICE
-STORAGE_CHOICE=${STORAGE_CHOICE:-1}
-
-if [ "$STORAGE_CHOICE" = "1" ]; then
-    DISK_BUS="ide"
-    NETWORK_MODEL="e1000"
-    STORAGE_TYPE="IDE (Compatible)"
-else
-    DISK_BUS="virtio"
-    NETWORK_MODEL="virtio"
-    STORAGE_TYPE="VirtIO (High Performance)"
-fi
-
 # Display configuration summary
 echo -e "\n${GREEN}=== Configuration Summary ===${NC}"
 echo "OS Version     : Debian $VERSION_ID ($VERSION_CODENAME)"
@@ -189,7 +173,6 @@ echo "VM Name        : ${VM_NAME}"
 echo "RAM            : ${RAM_SIZE}MB"
 echo "vCPU           : ${VCPU_COUNT}"
 echo "Disk Size      : ${DISK_SIZE}G"
-echo "Storage Type   : ${STORAGE_TYPE}"
 echo "VNC Port       : ${VNC_PORT}"
 echo ""
 read -p "Continue with this configuration? (y/n): " CONFIRM
@@ -234,95 +217,33 @@ echo -e "${GREEN}✓ KVM packages installed successfully${NC}"
 # Enable libvirtd
 echo -e "${YELLOW}[2/9] Enabling and starting libvirtd...${NC}"
 sudo systemctl enable --now libvirtd
-
-# Configure default network with NAT
-echo -e "${YELLOW}[2.5/9] Configuring network...${NC}"
-
-# Enable IP forwarding
-sudo sysctl -w net.ipv4.ip_forward=1
-if ! grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf; then
-    echo "net.ipv4.ip_forward=1" | sudo tee -a /etc/sysctl.conf
-fi
-
-# Stop and undefine existing network
-sudo virsh net-destroy default 2>/dev/null || true
-sudo virsh net-undefine default 2>/dev/null || true
-
-# Create network configuration
-cat > /tmp/default-network.xml << 'EOF'
-<network>
-  <name>default</name>
-  <forward mode='nat'/>
-  <bridge name='virbr0' stp='on' delay='0'/>
-  <ip address='192.168.122.1' netmask='255.255.255.0'>
-    <dhcp>
-      <range start='192.168.122.2' end='192.168.122.254'/>
-    </dhcp>
-  </ip>
-</network>
-EOF
-
-# Define and start network
-sudo virsh net-define /tmp/default-network.xml
-sudo virsh net-start default
+sudo virsh net-start default 2>/dev/null || echo "Default network already active"
 sudo virsh net-autostart default
-
-echo -e "${GREEN}✓ Network configured with NAT${NC}"
-sudo virsh net-list --all
 
 # Check KVM
 echo -e "${YELLOW}[3/9] Checking KVM modules...${NC}"
 lsmod | grep kvm
 
-# Download Windows ISO
-echo -e "${YELLOW}[4/9] Downloading Windows 10 LTSC 2021 ISO...${NC}"
+# Download ISO
+echo -e "${YELLOW}[4/9] Downloading Windows 10 Tiny ISO...${NC}"
 sudo mkdir -p /var/lib/libvirt/boot
 cd /var/lib/libvirt/boot
-if [ ! -f "Windows10-LTSC.iso" ]; then
-    echo "Downloading Windows 10 LTSC 64-bit (this may take a while)..."
-    sudo wget -O Windows10-LTSC.iso "https://archive.org/download/windows-10-ltsc-2021/windows%2010%20LTSC%2064.iso"
-    
-    # Verify download
-    if [ $? -eq 0 ] && [ -f "Windows10-LTSC.iso" ]; then
-        echo -e "${GREEN}✓ Download completed successfully${NC}"
-    else
-        echo -e "${RED}✗ Download failed!${NC}"
-        cleanup_and_exit
-    fi
+if [ ! -f "Windows10-Tiny.iso" ]; then
+    sudo wget -O Windows10-Tiny.iso "https://archive.org/download/windows-10-ltsc-2021/windows%2010%20LTSC%2064.iso"
 else
-    echo "Windows ISO already exists, skipping download."
+    echo "ISO already exists, skipping download."
 fi
 
-ls -lh Windows10-LTSC.iso
-file Windows10-LTSC.iso
-
-# Download VirtIO drivers ISO (always download for option to use later)
-echo -e "${YELLOW}[5/9] Downloading VirtIO drivers ISO...${NC}"
-if [ ! -f "virtio-win.iso" ]; then
-    echo "Downloading VirtIO drivers..."
-    sudo wget -O virtio-win.iso https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso
-    
-    if [ $? -eq 0 ] && [ -f "virtio-win.iso" ]; then
-        echo -e "${GREEN}✓ VirtIO drivers downloaded successfully${NC}"
-    else
-        echo -e "${YELLOW}⚠ VirtIO download failed, trying alternative...${NC}"
-        sudo wget -O virtio-win.iso https://github.com/virtio-win/virtio-win-pkg-scripts/blob/master/virtio-win.iso?raw=true
-    fi
-else
-    echo "VirtIO ISO already exists, skipping download."
-fi
-
-if [ -f "virtio-win.iso" ]; then
-    ls -lh virtio-win.iso
-fi
+ls -lh Windows10-Tiny.iso
+file Windows10-Tiny.iso
 
 # Create disk image
-echo -e "${YELLOW}[6/9] Creating ${DISK_SIZE}G disk image...${NC}"
+echo -e "${YELLOW}[5/9] Creating ${DISK_SIZE}G disk image...${NC}"
 sudo mkdir -p /var/lib/libvirt/images
 sudo qemu-img create -f qcow2 /var/lib/libvirt/images/${VM_NAME}.img ${DISK_SIZE}G
 
 # Setup swap
-echo -e "${YELLOW}[7/9] Setting up ${SWAP_SIZE}G swap...${NC}"
+echo -e "${YELLOW}[6/9] Setting up ${SWAP_SIZE}G swap...${NC}"
 if [ ! -f /swapfile ]; then
     sudo fallocate -l ${SWAP_SIZE}G /swapfile
     sudo chmod 600 /swapfile
@@ -340,147 +261,48 @@ else
 fi
 
 # Remove old VM if exists
-echo -e "${YELLOW}[8/9] Cleaning up old VM (if exists)...${NC}"
+echo -e "${YELLOW}[7/9] Cleaning up old VM (if exists)...${NC}"
 sudo virsh destroy ${VM_NAME} 2>/dev/null || true
 sudo virsh undefine ${VM_NAME} --remove-all-storage 2>/dev/null || true
 
 # Install VM
-echo -e "${YELLOW}[9/9] Creating Virtual Machine...${NC}"
-
-# Build virt-install command based on storage choice
-VIRT_INSTALL_CMD="sudo virt-install \
+echo -e "${YELLOW}[8/9] Creating Virtual Machine...${NC}"
+sudo virt-install \
   --name ${VM_NAME} \
   --ram ${RAM_SIZE} \
   --vcpus ${VCPU_COUNT} \
-  --cdrom /var/lib/libvirt/boot/Windows10-LTSC.iso \
-  --disk path=/var/lib/libvirt/images/${VM_NAME}.img,bus=${DISK_BUS} \
+  --cdrom /var/lib/libvirt/boot/Windows10-Tiny.iso \
+  --disk path=/var/lib/libvirt/images/${VM_NAME}.img,size=${DISK_SIZE} \
   --os-variant win10 \
-  --network network=default,model=${NETWORK_MODEL} \
+  --network network=default \
   --graphics vnc,listen=0.0.0.0,port=${VNC_PORT} \
   --boot cdrom,hd,menu=on \
-  --noautoconsole"
-
-# Add VirtIO drivers CD if available
-if [ -f "/var/lib/libvirt/boot/virtio-win.iso" ]; then
-    VIRT_INSTALL_CMD="${VIRT_INSTALL_CMD} --disk /var/lib/libvirt/boot/virtio-win.iso,device=cdrom"
-    echo -e "${GREEN}✓ VirtIO drivers ISO will be attached as second CD${NC}"
-fi
-
-# Execute the command
-eval $VIRT_INSTALL_CMD
-
-sleep 5
-
-# Get VM IP
-echo -e "${YELLOW}Getting VM IP address...${NC}"
-VM_IP=$(sudo virsh domifaddr ${VM_NAME} 2>/dev/null | grep -oP '(\d+\.){3}\d+' | head -1)
+  --noautoconsole
 
 # Access info
-VPS_IP=$(hostname -I | awk '{print $1}')
-
 echo -e "\n${GREEN}=== Installation Complete ===${NC}"
 echo -e "${GREEN}VM created successfully!${NC}\n"
-
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "VNC Connection:"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  IP:   ${VPS_IP}"
+echo "Access VM via VNC:"
+echo "  IP: $(hostname -I | awk '{print $1}')"
 echo "  Port: ${VNC_PORT}"
 echo ""
-echo "Use VNC viewer to access VM:"
-echo "  vncviewer ${VPS_IP}:${VNC_PORT}"
+echo "Use VNC viewer to access VM, example:"
+echo "  vncviewer $(hostname -I | awk '{print $1}'):${VNC_PORT}"
 echo ""
-
-if [ "$STORAGE_CHOICE" = "2" ]; then
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "VirtIO Driver Installation (Required!):"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo -e "${YELLOW}You chose VirtIO drivers for better performance.${NC}"
-    echo "During Windows Setup when it asks to select drive:"
-    echo ""
-    echo "1. Click 'Load driver'"
-    echo "2. Click 'Browse'"
-    echo "3. Navigate to the VirtIO CD (usually D: or E:)"
-    echo "4. Go to: viostor\\w10\\amd64"
-    echo "5. Select 'Red Hat VirtIO SCSI controller'"
-    echo "6. Click OK"
-    echo "7. The disk should now appear for installation"
-    echo ""
-    echo "For network drivers after Windows installation:"
-    echo "  Navigate to: NetKVM\\w10\\amd64"
-    echo ""
-else
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "Storage Configuration:"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo -e "${GREEN}Using IDE storage - Windows will detect disk automatically!${NC}"
-    echo ""
-    echo "Optional: After installation, you can convert to VirtIO for better performance"
-    echo ""
-fi
-
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "RDP Connection (After Windows Installation):"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-if [ -n "$VM_IP" ]; then
-    echo "  VM IP: ${VM_IP}"
-    echo "  Port:  3389 (default RDP port)"
-    echo ""
-    echo "Connect using:"
-    echo "  mstsc /v:${VM_IP}:3389"
-else
-    echo "  VM IP not detected yet. Get it with:"
-    echo "    sudo virsh domifaddr ${VM_NAME}"
-    echo ""
-    echo "  Then connect to VM_IP:3389"
-fi
+echo "Or use virt-manager for GUI:"
+echo "  virt-manager"
 echo ""
-echo -e "${YELLOW}IMPORTANT: Enable RDP in Windows first!${NC}"
-echo "1. Complete Windows installation via VNC"
-echo "2. Open System Properties (Win + Pause)"
-echo "3. Click 'Remote settings'"
-echo "4. Enable 'Allow remote connections to this computer'"
-echo "5. Configure Windows Firewall:"
-echo "   Run in PowerShell as Admin:"
-echo "   Enable-NetFirewallRule -DisplayGroup 'Remote Desktop'"
-echo ""
-echo -e "${GREEN}Note: Since all ports are open on your VPS, you can${NC}"
-echo -e "${GREEN}connect directly to the VM's IP address on port 3389.${NC}"
-echo ""
-
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "VM Management Commands:"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  Start VM:   sudo virsh start ${VM_NAME}"
 echo "  Stop VM:    sudo virsh shutdown ${VM_NAME}"
 echo "  Force Stop: sudo virsh destroy ${VM_NAME}"
 echo "  Delete VM:  sudo virsh undefine ${VM_NAME} --remove-all-storage"
 echo "  VM Status:  sudo virsh list --all"
-echo "  Get VM IP:  sudo virsh domifaddr ${VM_NAME}"
 echo ""
-
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "Check Logs Commands:"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  VM Logs:      sudo tail -f /var/log/libvirt/qemu/${VM_NAME}.log"
-echo "  Libvirt Logs: sudo tail -f /var/log/libvirt/libvirtd.log"
-echo "  System Logs:  sudo journalctl -u libvirtd -f"
-echo "  VM Console:   sudo virsh console ${VM_NAME}"
-echo ""
-
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "Network Troubleshooting (if no internet):"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  Check network:     sudo virsh net-list --all"
-echo "  Restart network:   sudo virsh net-destroy default && sudo virsh net-start default"
-echo "  Check IP forward:  cat /proc/sys/net/ipv4/ip_forward (should be 1)"
-echo "  Check DNS in VM:   Use 8.8.8.8 or 1.1.1.1 as DNS"
-echo ""
-echo "  Inside Windows VM, check network settings:"
-echo "  - Network adapter should get IP via DHCP (192.168.122.x)"
-echo "  - Gateway should be 192.168.122.1"
-echo "  - DNS: 8.8.8.8 or 1.1.1.1"
-echo ""
-
-echo -e "${GREEN}Installation script completed successfully!${NC}"
-echo -e "${GREEN}All firewall/iptables configurations removed as requested.${NC}"
+echo "  VM Logs:           sudo virsh dumpxml ${VM_NAME}"
+echo "  QEMU Logs:         sudo tail -f /var/log/libvirt/qemu/${VM_NAME}.log"
+echo "  Libvirt Logs:      sudo tail -f /var/log/libvirt/libvirtd.log"
+echo "  System Logs:       sudo journalctl -u libvirtd -f"
+echo "  VM Console:        sudo virsh console ${VM_NAME}"
+echo "  All VM Logs:       sudo ls -lh /var/log/libvirt/qemu/"
