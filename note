@@ -1,3 +1,5 @@
+# ================= On windows powershell ================
+
 # Run to command VNC to allow RDP
 reg add "HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f
 Set-Service -Name TermService -StartupType Automatic
@@ -12,23 +14,42 @@ reg add "HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Terminal Server\Win
 #Configure Windows Firewall
 netsh advfirewall firewall set rule group="remote desktop" new enable=Yes
 
-#Check
-netstat -an | find "3389"
+#Check RDP
+netstat -ano | findstr :3389
 
 # ============= RDP Connection Setup on Server ===========
 
-# Get VM IP first
-sudo virsh domifaddr win10ltsc
+# First, clear any existing RDP rules to avoid conflicts
+sudo iptables -t nat -D PREROUTING -p tcp --dport 3389 -j DNAT --to-destination 192.168.122.140:3389 2>/dev/null
+sudo iptables -D FORWARD -p tcp -d 192.168.122.140 --dport 3389 -j ACCEPT 2>/dev/null
+sudo iptables -t nat -D OUTPUT -p tcp --dport 3389 -j DNAT --to-destination 192.168.122.140:3389 2>/dev/null
 
 # Enable IP forwarding
 sudo sysctl -w net.ipv4.ip_forward=1
+echo "net.ipv4.ip_forward=1" | sudo tee -a /etc/sysctl.conf
 
-# Forward port 3389 (replace VM_IP with actual IP)
-sudo iptables -t nat -A PREROUTING -p tcp --dport 3389 -j DNAT --to-destination VM_IP:3389
-sudo iptables -A FORWARD -p tcp -d VM_IP --dport 3389 -j ACCEPT
+# Add iptables rules for EXTERNAL connections (from outside the host)
+sudo iptables -t nat -A PREROUTING -p tcp --dport 3389 -j DNAT --to-destination 192.168.122.140:3389
+sudo iptables -A FORWARD -p tcp -d 192.168.122.140 --dport 3389 -j ACCEPT
+
+# Add iptables rules for LOCAL connections (from localhost/host itself)
+sudo iptables -t nat -A OUTPUT -p tcp --dport 3389 -j DNAT --to-destination 192.168.122.140:3389
+
+# Add POSTROUTING for masquerading
 sudo iptables -t nat -A POSTROUTING -j MASQUERADE
 
-# Save rules
+# Install iptables-persistent to save rules
 sudo apt install iptables-persistent -y
+
+# Save the rules (answer Yes to save current rules)
 sudo netfilter-persistent save
 
+# Verify the rules are applied
+echo "=== Checking NAT rules ==="
+sudo iptables -t nat -L -n -v | grep 3389
+echo ""
+echo "=== Testing connection to VM directly ==="
+nc -zv 192.168.122.140 3389
+echo ""
+echo "=== Testing connection via localhost ==="
+nc -zv localhost 3389
