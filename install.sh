@@ -181,16 +181,6 @@ else
     STORAGE_TYPE="VirtIO (High Performance)"
 fi
 
-echo -e "\n${YELLOW}RDP Configuration:${NC}"
-read -p "Enable RDP port forwarding? (y/n, default: y): " ENABLE_RDP
-ENABLE_RDP=${ENABLE_RDP:-y}
-
-if [[ $ENABLE_RDP =~ ^[Yy]$ ]]; then
-    read -p "Host RDP port (default: 3389): " HOST_RDP_PORT
-    HOST_RDP_PORT=${HOST_RDP_PORT:-3389}
-    GUEST_RDP_PORT=3389
-fi
-
 # Display configuration summary
 echo -e "\n${GREEN}=== Configuration Summary ===${NC}"
 echo "OS Version     : Debian $VERSION_ID ($VERSION_CODENAME)"
@@ -201,12 +191,6 @@ echo "vCPU           : ${VCPU_COUNT}"
 echo "Disk Size      : ${DISK_SIZE}G"
 echo "Storage Type   : ${STORAGE_TYPE}"
 echo "VNC Port       : ${VNC_PORT}"
-if [[ $ENABLE_RDP =~ ^[Yy]$ ]]; then
-    echo "RDP Enabled    : Yes"
-    echo "RDP Port       : ${HOST_RDP_PORT}"
-else
-    echo "RDP Enabled    : No"
-fi
 echo ""
 read -p "Continue with this configuration? (y/n): " CONFIRM
 
@@ -218,7 +202,7 @@ fi
 echo -e "\n${GREEN}Starting installation...${NC}\n"
 
 # Update and install packages for Debian 11
-echo -e "${YELLOW}[1/11] Updating system and installing packages...${NC}"
+echo -e "${YELLOW}[1/9] Updating system and installing packages...${NC}"
 sudo apt update && sudo apt install -y \
     qemu-kvm \
     libvirt-daemon-system \
@@ -227,11 +211,10 @@ sudo apt update && sudo apt install -y \
     virtinst \
     virt-manager \
     cpu-checker \
-    iptables-persistent \
     wget
 
 # Verify KVM installation
-echo -e "${YELLOW}[1.5/11] Verifying KVM installation...${NC}"
+echo -e "${YELLOW}[1.5/9] Verifying KVM installation...${NC}"
 if ! command -v qemu-system-x86_64 &> /dev/null; then
     echo -e "${RED}✗ QEMU installation failed!${NC}"
     cleanup_and_exit
@@ -249,17 +232,17 @@ fi
 echo -e "${GREEN}✓ KVM packages installed successfully${NC}"
 
 # Enable libvirtd
-echo -e "${YELLOW}[2/11] Enabling and starting libvirtd...${NC}"
+echo -e "${YELLOW}[2/9] Enabling and starting libvirtd...${NC}"
 sudo systemctl enable --now libvirtd
 sudo virsh net-start default 2>/dev/null || echo "Default network already active"
 sudo virsh net-autostart default
 
 # Check KVM
-echo -e "${YELLOW}[3/11] Checking KVM modules...${NC}"
+echo -e "${YELLOW}[3/9] Checking KVM modules...${NC}"
 lsmod | grep kvm
 
 # Download Windows ISO
-echo -e "${YELLOW}[4/11] Downloading Windows 10 LTSC 2021 ISO...${NC}"
+echo -e "${YELLOW}[4/9] Downloading Windows 10 LTSC 2021 ISO...${NC}"
 sudo mkdir -p /var/lib/libvirt/boot
 cd /var/lib/libvirt/boot
 if [ ! -f "Windows10-LTSC.iso" ]; then
@@ -281,7 +264,7 @@ ls -lh Windows10-LTSC.iso
 file Windows10-LTSC.iso
 
 # Download VirtIO drivers ISO (always download for option to use later)
-echo -e "${YELLOW}[5/11] Downloading VirtIO drivers ISO...${NC}"
+echo -e "${YELLOW}[5/9] Downloading VirtIO drivers ISO...${NC}"
 if [ ! -f "virtio-win.iso" ]; then
     echo "Downloading VirtIO drivers..."
     sudo wget -O virtio-win.iso https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso
@@ -301,12 +284,12 @@ if [ -f "virtio-win.iso" ]; then
 fi
 
 # Create disk image
-echo -e "${YELLOW}[6/11] Creating ${DISK_SIZE}G disk image...${NC}"
+echo -e "${YELLOW}[6/9] Creating ${DISK_SIZE}G disk image...${NC}"
 sudo mkdir -p /var/lib/libvirt/images
 sudo qemu-img create -f qcow2 /var/lib/libvirt/images/${VM_NAME}.img ${DISK_SIZE}G
 
 # Setup swap
-echo -e "${YELLOW}[7/11] Setting up ${SWAP_SIZE}G swap...${NC}"
+echo -e "${YELLOW}[7/9] Setting up ${SWAP_SIZE}G swap...${NC}"
 if [ ! -f /swapfile ]; then
     sudo fallocate -l ${SWAP_SIZE}G /swapfile
     sudo chmod 600 /swapfile
@@ -324,12 +307,12 @@ else
 fi
 
 # Remove old VM if exists
-echo -e "${YELLOW}[8/11] Cleaning up old VM (if exists)...${NC}"
+echo -e "${YELLOW}[8/9] Cleaning up old VM (if exists)...${NC}"
 sudo virsh destroy ${VM_NAME} 2>/dev/null || true
 sudo virsh undefine ${VM_NAME} --remove-all-storage 2>/dev/null || true
 
 # Install VM
-echo -e "${YELLOW}[9/11] Creating Virtual Machine...${NC}"
+echo -e "${YELLOW}[9/9] Creating Virtual Machine...${NC}"
 
 # Build virt-install command based on storage choice
 VIRT_INSTALL_CMD="sudo virt-install \
@@ -353,58 +336,11 @@ fi
 # Execute the command
 eval $VIRT_INSTALL_CMD
 
-# Wait for VM to get IP
-if [[ $ENABLE_RDP =~ ^[Yy]$ ]]; then
-    echo -e "${YELLOW}[10/11] Configuring RDP port forwarding...${NC}"
-    echo "Waiting for VM to start and get IP address (this may take 30-60 seconds)..."
-    
-    sleep 10
-    
-    # Try to get VM IP (retry up to 6 times, 10 seconds each)
-    VM_IP=""
-    for i in {1..6}; do
-        VM_IP=$(sudo virsh domifaddr ${VM_NAME} 2>/dev/null | grep -oP '(\d+\.){3}\d+' | head -1)
-        if [ -n "$VM_IP" ]; then
-            break
-        fi
-        echo "Attempt $i/6: Waiting for VM IP..."
-        sleep 10
-    done
-    
-    if [ -z "$VM_IP" ]; then
-        echo -e "${YELLOW}⚠ Could not detect VM IP automatically.${NC}"
-        echo -e "${YELLOW}You can configure RDP later when Windows is fully installed.${NC}"
-        echo -e "${YELLOW}Use this command after installation:${NC}"
-        echo -e "${BLUE}  VM_IP=\$(sudo virsh domifaddr ${VM_NAME} | grep -oP '(\d+\.){3}\d+' | head -1)${NC}"
-        echo -e "${BLUE}  sudo iptables -t nat -A PREROUTING -p tcp --dport ${HOST_RDP_PORT} -j DNAT --to-destination \$VM_IP:3389${NC}"
-        echo -e "${BLUE}  sudo iptables -A FORWARD -p tcp -d \$VM_IP --dport 3389 -j ACCEPT${NC}"
-        echo -e "${BLUE}  sudo iptables -t nat -A POSTROUTING -o virbr0 -p tcp -d \$VM_IP --dport 3389 -j MASQUERADE${NC}"
-        echo -e "${BLUE}  sudo netfilter-persistent save${NC}"
-    else
-        echo -e "${GREEN}✓ VM IP detected: $VM_IP${NC}"
-        
-        # Enable IP forwarding
-        sudo sysctl -w net.ipv4.ip_forward=1
-        if ! grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf; then
-            echo "net.ipv4.ip_forward=1" | sudo tee -a /etc/sysctl.conf
-        fi
-        
-        # Add iptables rules
-        echo "Configuring iptables rules..."
-        sudo iptables -t nat -A PREROUTING -p tcp --dport ${HOST_RDP_PORT} -j DNAT --to-destination ${VM_IP}:${GUEST_RDP_PORT}
-        sudo iptables -A FORWARD -p tcp -d ${VM_IP} --dport ${GUEST_RDP_PORT} -j ACCEPT
-        sudo iptables -t nat -A POSTROUTING -o virbr0 -p tcp -d ${VM_IP} --dport ${GUEST_RDP_PORT} -j MASQUERADE
-        
-        # Save iptables rules
-        sudo netfilter-persistent save
-        
-        echo -e "${GREEN}✓ RDP port forwarding configured${NC}"
-    fi
-else
-    echo -e "${YELLOW}[10/11] Skipping RDP configuration${NC}"
-fi
+sleep 5
 
-echo -e "${YELLOW}[11/11] Finalizing installation...${NC}"
+# Get VM IP
+echo -e "${YELLOW}Getting VM IP address...${NC}"
+VM_IP=$(sudo virsh domifaddr ${VM_NAME} 2>/dev/null | grep -oP '(\d+\.){3}\d+' | head -1)
 
 # Access info
 VPS_IP=$(hostname -I | awk '{print $1}')
@@ -450,26 +386,34 @@ else
     echo ""
 fi
 
-if [[ $ENABLE_RDP =~ ^[Yy]$ ]] && [ -n "$VM_IP" ]; then
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "RDP Connection (After Windows Installation):"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "  IP:   ${VPS_IP}"
-    echo "  Port: ${HOST_RDP_PORT}"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "RDP Connection (After Windows Installation):"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+if [ -n "$VM_IP" ]; then
+    echo "  VM IP: ${VM_IP}"
+    echo "  Port:  3389 (default RDP port)"
     echo ""
     echo "Connect using:"
-    echo "  mstsc /v:${VPS_IP}:${HOST_RDP_PORT}"
+    echo "  mstsc /v:${VM_IP}:3389"
+else
+    echo "  VM IP not detected yet. Get it with:"
+    echo "    sudo virsh domifaddr ${VM_NAME}"
     echo ""
-    echo -e "${YELLOW}IMPORTANT: Enable RDP in Windows first!${NC}"
-    echo "1. Complete Windows installation via VNC"
-    echo "2. Open System Properties (Win + Pause)"
-    echo "3. Click 'Remote settings'"
-    echo "4. Enable 'Allow remote connections to this computer'"
-    echo "5. Configure Windows Firewall:"
-    echo "   Run in PowerShell as Admin:"
-    echo "   Enable-NetFirewallRule -DisplayGroup 'Remote Desktop'"
-    echo ""
+    echo "  Then connect to VM_IP:3389"
 fi
+echo ""
+echo -e "${YELLOW}IMPORTANT: Enable RDP in Windows first!${NC}"
+echo "1. Complete Windows installation via VNC"
+echo "2. Open System Properties (Win + Pause)"
+echo "3. Click 'Remote settings'"
+echo "4. Enable 'Allow remote connections to this computer'"
+echo "5. Configure Windows Firewall:"
+echo "   Run in PowerShell as Admin:"
+echo "   Enable-NetFirewallRule -DisplayGroup 'Remote Desktop'"
+echo ""
+echo -e "${GREEN}Note: Since all ports are open on your VPS, you can${NC}"
+echo -e "${GREEN}connect directly to the VM's IP address on port 3389.${NC}"
+echo ""
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "VM Management Commands:"
@@ -491,21 +435,5 @@ echo "  System Logs:  sudo journalctl -u libvirtd -f"
 echo "  VM Console:   sudo virsh console ${VM_NAME}"
 echo ""
 
-if [[ $ENABLE_RDP =~ ^[Yy]$ ]]; then
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "RDP Troubleshooting:"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "  Check rules:  sudo iptables -t nat -L -n -v | grep ${HOST_RDP_PORT}"
-    echo "  Test from VM: telnet ${VM_IP} 3389"
-    if [ -n "$VM_IP" ]; then
-        echo "  VM IP:        ${VM_IP}"
-    fi
-    echo ""
-    echo "  Remove RDP forwarding:"
-    echo "    sudo iptables -t nat -D PREROUTING -p tcp --dport ${HOST_RDP_PORT} -j DNAT --to-destination ${VM_IP}:3389"
-    echo "    sudo iptables -D FORWARD -p tcp -d ${VM_IP} --dport 3389 -j ACCEPT"
-    echo "    sudo netfilter-persistent save"
-    echo ""
-fi
-
 echo -e "${GREEN}Installation script completed successfully!${NC}"
+echo -e "${GREEN}All firewall/iptables configurations removed as requested.${NC}"
