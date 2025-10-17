@@ -228,14 +228,14 @@ lsmod | grep kvm
 echo -e "${YELLOW}[4/9] Downloading Windows 10 Tiny ISO...${NC}"
 sudo mkdir -p /var/lib/libvirt/boot
 cd /var/lib/libvirt/boot
-if [ ! -f "Windows10-Tiny.iso" ]; then
-    sudo wget -O Windows10-Tiny.iso "https://archive.org/download/windows-10-ltsc-2021/windows%2010%20LTSC%2064.iso"
+if [ ! -f "Windows10-Lstc.iso" ]; then
+    sudo wget -O Windows10-Lstc.iso "https://archive.org/download/windows-10-ltsc-2021/windows%2010%20LTSC%2064.iso"
 else
     echo "ISO already exists, skipping download."
 fi
 
-ls -lh Windows10-Tiny.iso
-file Windows10-Tiny.iso
+ls -lh Windows10-Lstc.iso
+file Windows10-Lstc.iso
 
 # Create disk image
 echo -e "${YELLOW}[5/9] Creating ${DISK_SIZE}G disk image...${NC}"
@@ -271,7 +271,7 @@ sudo virt-install \
   --name ${VM_NAME} \
   --ram ${RAM_SIZE} \
   --vcpus ${VCPU_COUNT} \
-  --cdrom /var/lib/libvirt/boot/Windows10-Tiny.iso \
+  --cdrom /var/lib/libvirt/boot/Windows10-Lstc.iso \
   --disk path=/var/lib/libvirt/images/${VM_NAME}.img,size=${DISK_SIZE} \
   --os-variant win10 \
   --network network=default \
