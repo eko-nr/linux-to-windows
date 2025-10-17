@@ -234,8 +234,41 @@ echo -e "${GREEN}✓ KVM packages installed successfully${NC}"
 # Enable libvirtd
 echo -e "${YELLOW}[2/9] Enabling and starting libvirtd...${NC}"
 sudo systemctl enable --now libvirtd
-sudo virsh net-start default 2>/dev/null || echo "Default network already active"
+
+# Configure default network with NAT
+echo -e "${YELLOW}[2.5/9] Configuring network...${NC}"
+
+# Enable IP forwarding
+sudo sysctl -w net.ipv4.ip_forward=1
+if ! grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf; then
+    echo "net.ipv4.ip_forward=1" | sudo tee -a /etc/sysctl.conf
+fi
+
+# Stop and undefine existing network
+sudo virsh net-destroy default 2>/dev/null || true
+sudo virsh net-undefine default 2>/dev/null || true
+
+# Create network configuration
+cat > /tmp/default-network.xml << 'EOF'
+<network>
+  <name>default</name>
+  <forward mode='nat'/>
+  <bridge name='virbr0' stp='on' delay='0'/>
+  <ip address='192.168.122.1' netmask='255.255.255.0'>
+    <dhcp>
+      <range start='192.168.122.2' end='192.168.122.254'/>
+    </dhcp>
+  </ip>
+</network>
+EOF
+
+# Define and start network
+sudo virsh net-define /tmp/default-network.xml
+sudo virsh net-start default
 sudo virsh net-autostart default
+
+echo -e "${GREEN}✓ Network configured with NAT${NC}"
+sudo virsh net-list --all
 
 # Check KVM
 echo -e "${YELLOW}[3/9] Checking KVM modules...${NC}"
@@ -433,6 +466,20 @@ echo "  VM Logs:      sudo tail -f /var/log/libvirt/qemu/${VM_NAME}.log"
 echo "  Libvirt Logs: sudo tail -f /var/log/libvirt/libvirtd.log"
 echo "  System Logs:  sudo journalctl -u libvirtd -f"
 echo "  VM Console:   sudo virsh console ${VM_NAME}"
+echo ""
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "Network Troubleshooting (if no internet):"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  Check network:     sudo virsh net-list --all"
+echo "  Restart network:   sudo virsh net-destroy default && sudo virsh net-start default"
+echo "  Check IP forward:  cat /proc/sys/net/ipv4/ip_forward (should be 1)"
+echo "  Check DNS in VM:   Use 8.8.8.8 or 1.1.1.1 as DNS"
+echo ""
+echo "  Inside Windows VM, check network settings:"
+echo "  - Network adapter should get IP via DHCP (192.168.122.x)"
+echo "  - Gateway should be 192.168.122.1"
+echo "  - DNS: 8.8.8.8 or 1.1.1.1"
 echo ""
 
 echo -e "${GREEN}Installation script completed successfully!${NC}"
