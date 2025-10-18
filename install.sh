@@ -7,8 +7,7 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-echo -e "${GREEN}=== VM Windows 10 LTSC Installation Script for Debian 11 ===${NC}\n"
-echo -e "${BLUE}With libvirt 10.9.0 LTS build from source and RDP Port Forwarding${NC}\n"
+echo -e "${GREEN}=== VM Windows 10 LTSC Installation Script for Debian 13 ===${NC}\n"
 
 # Function for cleanup and exit
 cleanup_and_exit() {
@@ -19,8 +18,8 @@ cleanup_and_exit() {
     exit 1
 }
 
-# Check if running on Debian 11
-echo -e "${BLUE}[CHECK] Verifying Debian 11...${NC}\n"
+# Check if running on Debian
+echo -e "${BLUE}[CHECK] Verifying Debian installation...${NC}\n"
 if [ -f /etc/os-release ]; then
     . /etc/os-release
     if [[ "$ID" != "debian" ]]; then
@@ -29,15 +28,15 @@ if [ -f /etc/os-release ]; then
         cleanup_and_exit
     fi
     
-    if [[ "$VERSION_ID" != "11" ]]; then
-        echo -e "${YELLOW}⚠ Warning: This script is optimized for Debian 11${NC}"
+    if [[ "$VERSION_ID" != "13" ]]; then
+        echo -e "${YELLOW}⚠ Warning: This script is optimized for Debian 13${NC}"
         echo -e "${YELLOW}  Detected version: Debian $VERSION_ID${NC}"
         read -p "Continue anyway? (y/n): " CONTINUE
         if [[ ! $CONTINUE =~ ^[Yy]$ ]]; then
             cleanup_and_exit
         fi
     else
-        echo -e "${GREEN}✓ Debian 11 (Bullseye) detected${NC}"
+        echo -e "${GREEN}✓ Debian 13 (Trixie) detected${NC}"
     fi
 else
     echo -e "${YELLOW}⚠ Cannot detect OS version, continuing...${NC}"
@@ -69,10 +68,7 @@ if [ -e /dev/kvm ]; then
     fi
 else
     echo -e "${RED}✗ /dev/kvm not found!${NC}"
-    echo -e "${RED}  This VPS likely:${NC}"
-    echo -e "${RED}  - Does not have nested virtualization enabled${NC}"
-    echo -e "${RED}  - Is using containers (LXC/Docker) instead of VM${NC}"
-    echo -e "${RED}  - Does not support KVM${NC}"
+    echo -e "${RED}  This VPS likely does not support KVM${NC}"
     cleanup_and_exit
 fi
 
@@ -96,7 +92,6 @@ else
         echo -e "${GREEN}✓ KVM module loaded successfully${NC}"
     else
         echo -e "${RED}✗ Failed to load KVM module!${NC}"
-        echo -e "${RED}  Kernel may not support KVM or nested virtualization is disabled.${NC}"
         cleanup_and_exit
     fi
 fi
@@ -124,18 +119,6 @@ if command -v systemd-detect-virt &> /dev/null; then
             echo -e "${YELLOW}  Proceeding with caution...${NC}"
             ;;
     esac
-fi
-
-# Check 5: Test kvm-ok (if available)
-if command -v kvm-ok &> /dev/null; then
-    echo -e "${YELLOW}→ Running kvm-ok test...${NC}"
-    if kvm-ok 2>&1 | grep -q "KVM acceleration can be used"; then
-        echo -e "${GREEN}✓ KVM acceleration verified${NC}"
-    else
-        echo -e "${RED}✗ KVM acceleration test failed!${NC}"
-        kvm-ok
-        cleanup_and_exit
-    fi
 fi
 
 echo -e "\n${GREEN}✅ VALIDATION PASSED - This VPS supports KVM!${NC}\n"
@@ -185,297 +168,126 @@ fi
 
 echo -e "\n${GREEN}Starting installation...${NC}\n"
 
-# Stop existing libvirt if running
-echo -e "${YELLOW}[0/10] Stopping existing libvirt services...${NC}"
-sudo systemctl stop libvirtd 2>/dev/null || true
-sudo systemctl stop virtlogd 2>/dev/null || true
-
-# Install build dependencies and basic packages
-echo -e "${YELLOW}[1/10] Installing build dependencies and base packages...${NC}"
+# Update and install packages
+echo -e "${YELLOW}[1/8] Installing required packages...${NC}"
 sudo apt update && sudo apt install -y \
-    build-essential \
-    git \
-    python3-pip \
-    python3-setuptools \
-    python3-wheel \
-    python3-docutils \
-    libglib2.0-dev \
-    libxml2-dev \
-    libxml2-utils \
-    libgnutls28-dev \
-    libdevmapper-dev \
-    libcurl4-gnutls-dev \
-    libpciaccess-dev \
-    libssh2-1-dev \
-    libnl-3-dev \
-    libnl-route-3-dev \
-    libyajl-dev \
-    libudev-dev \
-    libpcap-dev \
-    libnuma-dev \
-    libnetcf-dev \
-    libsanlock-dev \
-    libcap-ng-dev \
-    libselinux1-dev \
-    libaudit-dev \
-    libreadline-dev \
-    libtirpc-dev \
-    libglusterfs-dev \
-    libiscsi-dev \
-    librbd-dev \
-    librados-dev \
-    libfuse-dev \
-    libacl1-dev \
-    libattr1-dev \
-    libblkid-dev \
-    libparted-dev \
-    libapparmor-dev \
-    libnl-genl-3-dev \
-    bash-completion \
-    xsltproc \
+    qemu-system-x86 \
     qemu-kvm \
     qemu-utils \
+    libvirt-daemon-system \
+    libvirt-clients \
+    virtinst \
     bridge-utils \
     cpu-checker \
     wget \
-    pkg-config
+    net-tools
 
-# Upgrade meson and ninja to required versions
-echo -e "${BLUE}→ Upgrading meson and ninja to latest versions...${NC}"
-sudo pip3 install --upgrade meson ninja
-
-# Verify meson version
-MESON_VERSION=$(meson --version 2>/dev/null)
-echo -e "${GREEN}✓ Meson version: ${MESON_VERSION}${NC}"
-
-# Add pip binaries to PATH if not already there
-if ! command -v meson &> /dev/null; then
-    export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
-    echo 'export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"' >> ~/.bashrc
-fi
-
-# Build and install libvirt 10.9.0 from source
-echo -e "${YELLOW}[2/10] Building libvirt 10.9.0 LTS from source (this may take 10-20 minutes)...${NC}"
-
-LIBVIRT_VERSION="10.9.0"
-LIBVIRT_BUILD_DIR="/tmp/libvirt-build"
-
-# Remove old build directory if exists
-sudo rm -rf ${LIBVIRT_BUILD_DIR}
-mkdir -p ${LIBVIRT_BUILD_DIR}
-cd ${LIBVIRT_BUILD_DIR}
-
-echo -e "${BLUE}→ Downloading libvirt ${LIBVIRT_VERSION}...${NC}"
-# Try multiple sources with SSL bypass for expired certificates
-if ! wget --no-check-certificate -O libvirt-${LIBVIRT_VERSION}.tar.xz \
-    https://download.libvirt.org/libvirt-${LIBVIRT_VERSION}.tar.xz 2>/dev/null; then
-    echo -e "${YELLOW}  Trying alternative download source...${NC}"
-    if ! wget --no-check-certificate -O libvirt-${LIBVIRT_VERSION}.tar.xz \
-        https://libvirt.org/sources/libvirt-${LIBVIRT_VERSION}.tar.xz 2>/dev/null; then
-        echo -e "${YELLOW}  Trying GitHub mirror...${NC}"
-        wget -O libvirt-${LIBVIRT_VERSION}.tar.xz \
-            https://github.com/libvirt/libvirt/archive/refs/tags/v${LIBVIRT_VERSION}.tar.gz || {
-            echo -e "${RED}✗ Failed to download libvirt source!${NC}"
-            echo -e "${YELLOW}Trying to install from Debian backports instead...${NC}"
-            sudo apt install -y -t bullseye-backports libvirt-daemon-system libvirt-clients 2>/dev/null || {
-                echo -e "${RED}✗ All download methods failed!${NC}"
-                cleanup_and_exit
-            }
-            cd /
-            SKIP_BUILD=true
-        }
-    fi
-fi
-
-if [ "$SKIP_BUILD" != "true" ]; then
-    echo -e "${BLUE}→ Extracting source...${NC}"
-    tar -xf libvirt-${LIBVIRT_VERSION}.tar.xz || {
-        echo -e "${RED}✗ Failed to extract libvirt source!${NC}"
-        cleanup_and_exit
-    }
-    
-    # Handle GitHub archive structure (has different folder name)
-    if [ -d "libvirt-${LIBVIRT_VERSION}" ]; then
-        cd libvirt-${LIBVIRT_VERSION}
-    else
-        cd libvirt-* 2>/dev/null || {
-            echo -e "${RED}✗ Cannot find extracted libvirt directory!${NC}"
-            cleanup_and_exit
-        }
-    fi
-fi
-
-if [ "$SKIP_BUILD" != "true" ]; then
-    echo -e "${BLUE}→ Configuring build...${NC}"
-    # Use explicit meson path
-    MESON_BIN=$(which meson)
-    echo -e "${YELLOW}  Using meson: ${MESON_BIN}${NC}"
-    
-    $MESON_BIN setup build \
-        --prefix=/usr \
-        --sysconfdir=/etc \
-        --localstatedir=/var \
-        -Ddriver_qemu=enabled \
-        -Ddriver_network=enabled \
-        -Dstorage_fs=enabled \
-        -Dstorage_disk=enabled \
-        -Dstorage_dir=enabled || {
-        echo -e "${RED}✗ Meson configuration failed!${NC}"
-        echo -e "${YELLOW}Meson version: $(meson --version)${NC}"
-        echo -e "${YELLOW}Required version: >= 0.57.0${NC}"
-        cleanup_and_exit
-    }
-
-    echo -e "${BLUE}→ Compiling (using all CPU cores)...${NC}"
-    ninja -C build || {
-        echo -e "${RED}✗ Compilation failed!${NC}"
-        cleanup_and_exit
-    }
-
-    echo -e "${BLUE}→ Installing libvirt ${LIBVIRT_VERSION}...${NC}"
-    sudo ninja -C build install || {
-        echo -e "${RED}✗ Installation failed!${NC}"
-        cleanup_and_exit
-    }
-    
-    # Update library cache
-    sudo ldconfig
-    
-    echo -e "${GREEN}✓ libvirt 10.9.0 LTS compiled and installed successfully${NC}"
-fi
+# Get libvirt version
+LIBVIRT_VERSION=$(virsh --version 2>/dev/null || echo "unknown")
+echo -e "${GREEN}✓ Installed libvirt version: ${LIBVIRT_VERSION}${NC}"
 
 # Configure libvirt
-echo -e "${YELLOW}[3/10] Configuring libvirt...${NC}"
-sudo mkdir -p /etc/libvirt
+echo -e "${YELLOW}[2/8] Configuring libvirt...${NC}"
+
+# Set LIBVIRT_DEFAULT_URI
+export LIBVIRT_DEFAULT_URI="qemu:///system"
+if ! grep -q "LIBVIRT_DEFAULT_URI" /etc/environment 2>/dev/null; then
+    echo 'export LIBVIRT_DEFAULT_URI="qemu:///system"' | sudo tee -a /etc/environment
+fi
+if ! grep -q "LIBVIRT_DEFAULT_URI" ~/.bashrc 2>/dev/null; then
+    echo 'export LIBVIRT_DEFAULT_URI="qemu:///system"' >> ~/.bashrc
+fi
+
+# Create necessary directories
 sudo mkdir -p /var/lib/libvirt/images
 sudo mkdir -p /var/lib/libvirt/boot
-sudo mkdir -p /var/log/libvirt/qemu
 
-# Create systemd service files if not exist
-if [ ! -f /etc/systemd/system/libvirtd.service ]; then
-    echo -e "${BLUE}→ Creating libvirtd systemd service...${NC}"
-    sudo tee /etc/systemd/system/libvirtd.service > /dev/null <<EOF
-[Unit]
-Description=Virtualization daemon
-Requires=virtlogd.socket
-Before=libvirt-guests.service
-After=network.target
-After=dbus.service
-After=iscsid.service
-After=apparmor.service
-After=local-fs.target
-After=remote-fs.target
-Documentation=man:libvirtd(8)
-Documentation=https://libvirt.org
-
-[Service]
-Type=notify
-ExecStart=/usr/sbin/libvirtd --timeout 120
-ExecReload=/bin/kill -HUP \$MAINPID
-Restart=on-failure
-KillMode=process
-
-[Install]
-WantedBy=multi-user.target
-Also=virtlogd.socket
-EOF
+# Add user to libvirt group
+if ! getent group libvirt > /dev/null 2>&1; then
+    sudo groupadd libvirt
 fi
+sudo usermod -aG libvirt $USER || true
 
-if [ ! -f /etc/systemd/system/virtlogd.service ]; then
-    echo -e "${BLUE}→ Creating virtlogd systemd service...${NC}"
-    sudo tee /etc/systemd/system/virtlogd.service > /dev/null <<EOF
-[Unit]
-Description=Virtual machine log manager
-Requires=virtlogd.socket
-Before=libvirtd.service
-Documentation=man:virtlogd(8)
-Documentation=https://libvirt.org
-
-[Service]
-ExecStart=/usr/sbin/virtlogd
-ExecReload=/bin/kill -USR1 \$MAINPID
-Restart=on-failure
-
-[Install]
-Also=virtlogd.socket
-EOF
-fi
-
-if [ ! -f /etc/systemd/system/virtlogd.socket ]; then
-    echo -e "${BLUE}→ Creating virtlogd socket...${NC}"
-    sudo tee /etc/systemd/system/virtlogd.socket > /dev/null <<EOF
-[Unit]
-Description=Virtual machine log manager socket
-Before=libvirtd.service
-
-[Socket]
-ListenStream=/var/run/libvirt/virtlogd-sock
-SocketMode=0600
-
-[Install]
-WantedBy=sockets.target
-EOF
-fi
-
-# Reload systemd and start services
-echo -e "${YELLOW}[4/10] Starting libvirt services...${NC}"
-sudo systemctl daemon-reload
-sudo systemctl enable libvirtd virtlogd.socket
-sudo systemctl start virtlogd.socket
+# Enable and start libvirtd
+echo -e "${YELLOW}[3/8] Starting libvirt services...${NC}"
+sudo systemctl enable libvirtd
 sudo systemctl start libvirtd
 
 # Wait for libvirtd to be ready
-sleep 3
-
-# Verify installation
-echo -e "${BLUE}→ Verifying libvirt installation...${NC}"
-# Try multiple times as libvirt may need time to initialize
-for i in {1..3}; do
-    INSTALLED_VERSION=$(virsh --version 2>/dev/null)
-    if [ $? -eq 0 ] && [ ! -z "$INSTALLED_VERSION" ]; then
-        echo -e "${GREEN}✓ libvirt ${INSTALLED_VERSION} installed successfully${NC}"
+echo -e "${BLUE}→ Waiting for libvirtd to be ready...${NC}"
+for i in {1..10}; do
+    if sudo systemctl is-active --quiet libvirtd; then
+        echo -e "${GREEN}✓ libvirtd is active${NC}"
         break
     fi
-    if [ $i -lt 3 ]; then
-        echo -e "${YELLOW}  Waiting for libvirt to initialize (attempt $i/3)...${NC}"
-        sleep 2
-    else
-        echo -e "${RED}✗ Failed to verify libvirt installation!${NC}"
-        echo -e "${YELLOW}Checking if virsh binary exists...${NC}"
-        which virsh
-        echo -e "${YELLOW}Checking library paths...${NC}"
-        sudo ldconfig -p | grep libvirt
+    if [ $i -eq 10 ]; then
+        echo -e "${RED}✗ libvirtd failed to start!${NC}"
+        sudo journalctl -u libvirtd -n 50 --no-pager
         cleanup_and_exit
     fi
+    echo -e "${YELLOW}  Attempt $i/10...${NC}"
+    sleep 2
 done
 
-# Setup default network
-echo -e "${YELLOW}[5/10] Setting up default network...${NC}"
-sudo virsh net-start default 2>/dev/null || echo "Default network already active"
-sudo virsh net-autostart default
+# Verify virsh connection
+echo -e "${BLUE}→ Testing virsh connection...${NC}"
+if sudo virsh -c qemu:///system version &>/dev/null; then
+    echo -e "${GREEN}✓ virsh connection successful${NC}"
+else
+    echo -e "${RED}✗ virsh connection failed!${NC}"
+    cleanup_and_exit
+fi
 
-# Check KVM
-echo -e "${YELLOW}[6/10] Checking KVM modules...${NC}"
-lsmod | grep kvm
+# Setup default network
+echo -e "${YELLOW}[4/8] Setting up default network...${NC}"
+
+# Check if default network exists
+if ! sudo virsh -c qemu:///system net-info default &>/dev/null; then
+    echo -e "${BLUE}→ Creating default network...${NC}"
+    sudo tee /tmp/default-network.xml > /dev/null <<EOF
+<network>
+  <name>default</name>
+  <forward mode='nat'/>
+  <bridge name='virbr0' stp='on' delay='0'/>
+  <ip address='192.168.122.1' netmask='255.255.255.0'>
+    <dhcp>
+      <range start='192.168.122.2' end='192.168.122.254'/>
+    </dhcp>
+  </ip>
+</network>
+EOF
+    sudo virsh -c qemu:///system net-define /tmp/default-network.xml
+    sudo rm /tmp/default-network.xml
+fi
+
+# Start and autostart network
+sudo virsh -c qemu:///system net-start default 2>/dev/null || echo "Default network already active"
+sudo virsh -c qemu:///system net-autostart default
+
+echo -e "${GREEN}✓ Default network configured${NC}"
 
 # Download ISO
-echo -e "${YELLOW}[7/10] Downloading Windows 10 Tiny ISO...${NC}"
+echo -e "${YELLOW}[5/8] Downloading Windows 10 LTSC ISO...${NC}"
 cd /var/lib/libvirt/boot
 if [ ! -f "Windows10-Ltsc.iso" ]; then
-    sudo wget -O Windows10-Ltsc.iso "https://archive.org/download/windows-10-ltsc-2021/windows%2010%20LTSC%2064.iso"
+    sudo wget --no-check-certificate -O Windows10-Ltsc.iso \
+        "https://archive.org/download/windows-10-ltsc-2021/windows%2010%20LTSC%2064.iso" || {
+        echo -e "${RED}✗ Failed to download ISO!${NC}"
+        cleanup_and_exit
+    }
 else
-    echo "ISO already exists, skipping download."
+    echo -e "${GREEN}✓ ISO already exists, skipping download${NC}"
 fi
 
 ls -lh Windows10-Ltsc.iso
 file Windows10-Ltsc.iso
 
 # Create disk image
-echo -e "${YELLOW}[8/10] Creating ${DISK_SIZE}G disk image...${NC}"
+echo -e "${YELLOW}[6/8] Creating ${DISK_SIZE}G disk image...${NC}"
 sudo qemu-img create -f qcow2 /var/lib/libvirt/images/${VM_NAME}.img ${DISK_SIZE}G
 
 # Setup swap
-echo -e "${YELLOW}[9/10] Setting up ${SWAP_SIZE}G swap...${NC}"
+echo -e "${YELLOW}[7/8] Setting up ${SWAP_SIZE}G swap...${NC}"
 if [ ! -f /swapfile ]; then
     sudo fallocate -l ${SWAP_SIZE}G /swapfile
     sudo chmod 600 /swapfile
@@ -485,92 +297,85 @@ if [ ! -f /swapfile ]; then
     if ! grep -q '/swapfile' /etc/fstab; then
         echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
     fi
-    echo "Swap created and activated successfully."
+    echo -e "${GREEN}✓ Swap created and activated${NC}"
 else
-    echo "Swapfile already exists."
-    sudo swapon /swapfile 2>/dev/null || echo "Swap already active."
+    echo -e "${GREEN}✓ Swapfile already exists${NC}"
+    sudo swapon /swapfile 2>/dev/null || echo "Swap already active"
 fi
 
 # Remove old VM if exists
-echo -e "${YELLOW}[10/10] Cleaning up old VM (if exists)...${NC}"
-sudo virsh destroy ${VM_NAME} 2>/dev/null || true
-sudo virsh undefine ${VM_NAME} --remove-all-storage 2>/dev/null || true
+echo -e "${YELLOW}[8/8] Creating Virtual Machine with RDP port forwarding...${NC}"
+sudo virsh -c qemu:///system destroy ${VM_NAME} 2>/dev/null || true
+sudo virsh -c qemu:///system undefine ${VM_NAME} --remove-all-storage 2>/dev/null || true
 
-# Install VM
-echo -e "${YELLOW}[10/10] Creating Virtual Machine...${NC}"
-sudo virt-install \
-  --name ${VM_NAME} \
-  --ram ${RAM_SIZE} \
-  --vcpus ${VCPU_COUNT} \
-  --cdrom /var/lib/libvirt/boot/Windows10-Ltsc.iso \
-  --disk path=/var/lib/libvirt/images/${VM_NAME}.img,size=${DISK_SIZE} \
-  --os-variant win10 \
-  --network network=default \
-  --graphics vnc,listen=0.0.0.0,port=${VNC_PORT} \
-  --boot cdrom,hd,menu=on \
-  --check path_in_use=off \
-  --noautoconsole
+# Create VM with port forwarding
+echo -e "${BLUE}→ Installing VM...${NC}"
 
-# Wait for VM to be fully created
-sleep 5
-
-# Setup RDP port forwarding using QEMU commandline
-echo -e "\n${YELLOW}Setting up RDP port forwarding via libvirt/QEMU...${NC}"
-
-# Get the host's main IP
-HOST_IP=$(hostname -I | awk '{print $1}')
-
-# Stop VM to modify configuration
-echo -e "${BLUE}→ Stopping VM to add port forwarding...${NC}"
-sudo virsh destroy ${VM_NAME} 2>/dev/null || true
-
-# Edit VM XML to add QEMU commandline for port forwarding
-echo -e "${BLUE}→ Adding QEMU port forwarding to VM configuration...${NC}"
-
-# Export current XML
-sudo virsh dumpxml ${VM_NAME} > /tmp/${VM_NAME}.xml
-
-# Check if qemu namespace is already defined
-if ! grep -q "xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'" /tmp/${VM_NAME}.xml; then
-    # Add qemu namespace to domain tag
-    sed -i "s|<domain type='kvm'>|<domain type='kvm' xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'>|" /tmp/${VM_NAME}.xml
-fi
-
-# Remove closing </domain> tag temporarily
-sed -i 's|</domain>||g' /tmp/${VM_NAME}.xml
-
-# Add QEMU commandline for port forwarding if not exists
-if ! grep -q "qemu:commandline" /tmp/${VM_NAME}.xml; then
-    cat >> /tmp/${VM_NAME}.xml <<EOF
+# Create VM XML with QEMU commandline for port forwarding
+cat > /tmp/${VM_NAME}.xml <<EOF
+<domain type='kvm' xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'>
+  <name>${VM_NAME}</name>
+  <memory unit='MiB'>${RAM_SIZE}</memory>
+  <vcpu placement='static'>${VCPU_COUNT}</vcpu>
+  <os>
+    <type arch='x86_64' machine='pc'>hvm</type>
+    <boot dev='cdrom'/>
+    <boot dev='hd'/>
+  </os>
+  <features>
+    <acpi/>
+    <apic/>
+  </features>
+  <cpu mode='host-passthrough'/>
+  <clock offset='localtime'/>
+  <on_poweroff>destroy</on_poweroff>
+  <on_reboot>restart</on_reboot>
+  <on_crash>destroy</on_crash>
+  <devices>
+    <emulator>/usr/bin/qemu-system-x86_64</emulator>
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2'/>
+      <source file='/var/lib/libvirt/images/${VM_NAME}.img'/>
+      <target dev='vda' bus='virtio'/>
+    </disk>
+    <disk type='file' device='cdrom'>
+      <driver name='qemu' type='raw'/>
+      <source file='/var/lib/libvirt/boot/Windows10-Ltsc.iso'/>
+      <target dev='hdc' bus='ide'/>
+      <readonly/>
+    </disk>
+    <interface type='network'>
+      <source network='default'/>
+      <model type='e1000'/>
+    </interface>
+    <graphics type='vnc' port='${VNC_PORT}' listen='0.0.0.0'/>
+    <video>
+      <model type='vga'/>
+    </video>
+  </devices>
   <qemu:commandline>
     <qemu:arg value='-netdev'/>
-    <qemu:arg value='user,id=net0,hostfwd=tcp::${RDP_HOST_PORT}-:3389'/>
+    <qemu:arg value='user,id=hostnet1,hostfwd=tcp::${RDP_HOST_PORT}-:3389'/>
     <qemu:arg value='-device'/>
-    <qemu:arg value='e1000,netdev=net0'/>
+    <qemu:arg value='e1000,netdev=hostnet1,id=net1'/>
   </qemu:commandline>
 </domain>
 EOF
-else
-    # Close domain tag if commandline already exists
-    echo "</domain>" >> /tmp/${VM_NAME}.xml
-fi
 
-# Undefine and redefine VM with new configuration
-sudo virsh undefine ${VM_NAME}
-sudo virsh define /tmp/${VM_NAME}.xml
+# Define and start VM
+sudo virsh -c qemu:///system define /tmp/${VM_NAME}.xml
+sudo virsh -c qemu:///system start ${VM_NAME}
 
-echo -e "${GREEN}✓ RDP port forwarding configured: ${HOST_IP}:${RDP_HOST_PORT} -> VM:3389${NC}"
+# Cleanup
+rm /tmp/${VM_NAME}.xml
 
-# Start VM with new configuration
-echo -e "${BLUE}→ Starting VM with port forwarding...${NC}"
-sudo virsh start ${VM_NAME}
-
-echo -e "${GREEN}✓ VM started successfully with RDP forwarding enabled${NC}"
+# Get host IP
+HOST_IP=$(hostname -I | awk '{print $1}')
 
 # Access info
 echo -e "\n${GREEN}=== Installation Complete ===${NC}"
-echo -e "${GREEN}✅ libvirt ${INSTALLED_VERSION} (LTS 10.9.0 - Compatible with Debian 11) installed from source!${NC}"
-echo -e "${GREEN}✅ VM created successfully!${NC}\n"
+echo -e "${GREEN}✅ libvirt ${LIBVIRT_VERSION} installed!${NC}"
+echo -e "${GREEN}✅ VM created successfully with RDP port forwarding!${NC}\n"
 
 echo -e "${YELLOW}═══════════════════════════════════════════════════${NC}"
 echo -e "${GREEN}Step 1: Access VM via VNC to install Windows${NC}"
@@ -597,23 +402,24 @@ echo ""
 echo -e "${YELLOW}═══════════════════════════════════════════════════${NC}"
 echo -e "${GREEN}VM Management Commands${NC}"
 echo -e "${YELLOW}═══════════════════════════════════════════════════${NC}"
-echo "  Start VM:      sudo virsh start ${VM_NAME}"
-echo "  Stop VM:       sudo virsh shutdown ${VM_NAME}"
-echo "  Force Stop:    sudo virsh destroy ${VM_NAME}"
-echo "  Delete VM:     sudo virsh undefine ${VM_NAME} --remove-all-storage"
-echo "  VM Status:     sudo virsh list --all"
-echo "  VM IP:         sudo virsh domifaddr ${VM_NAME}"
+echo "  Start VM:      sudo virsh -c qemu:///system start ${VM_NAME}"
+echo "  Stop VM:       sudo virsh -c qemu:///system shutdown ${VM_NAME}"
+echo "  Force Stop:    sudo virsh -c qemu:///system destroy ${VM_NAME}"
+echo "  Delete VM:     sudo virsh -c qemu:///system undefine ${VM_NAME} --remove-all-storage"
+echo "  VM Status:     sudo virsh -c qemu:///system list --all"
+echo "  VM Info:       sudo virsh -c qemu:///system dominfo ${VM_NAME}"
 echo ""
 echo -e "${YELLOW}═══════════════════════════════════════════════════${NC}"
-echo -e "${GREEN}Port Forwarding Management${NC}"
+echo -e "${GREEN}Port Forwarding Info${NC}"
 echo -e "${YELLOW}═══════════════════════════════════════════════════${NC}"
-echo "  Check Config:  sudo virsh dumpxml ${VM_NAME} | grep -A5 qemu:commandline"
-echo "  View RDP Port: netstat -tulpn | grep ${RDP_HOST_PORT}"
+echo "  RDP Forward:   ${HOST_IP}:${RDP_HOST_PORT} -> VM:3389"
+echo "  Check Config:  sudo virsh -c qemu:///system dumpxml ${VM_NAME} | grep -A5 qemu:commandline"
+echo "  View Port:     netstat -tulpn | grep ${RDP_HOST_PORT}"
 echo ""
 echo -e "${YELLOW}═══════════════════════════════════════════════════${NC}"
 echo -e "${GREEN}Logs and Debugging${NC}"
 echo -e "${YELLOW}═══════════════════════════════════════════════════${NC}"
 echo "  VM Logs:       sudo tail -f /var/log/libvirt/qemu/${VM_NAME}.log"
 echo "  Libvirt Logs:  sudo journalctl -u libvirtd -f"
-echo "  Check Version: virsh --version"
+echo "  Check Version: virsh -c qemu:///system version"
 echo ""
