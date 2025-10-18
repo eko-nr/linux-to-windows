@@ -195,10 +195,10 @@ echo -e "${YELLOW}[1/10] Installing build dependencies and base packages...${NC}
 sudo apt update && sudo apt install -y \
     build-essential \
     git \
-    meson \
-    ninja-build \
-    python3-docutils \
     python3-pip \
+    python3-setuptools \
+    python3-wheel \
+    python3-docutils \
     libxml2-dev \
     libxml2-utils \
     libgnutls28-dev \
@@ -228,6 +228,20 @@ sudo apt update && sudo apt install -y \
     cpu-checker \
     wget \
     pkg-config
+
+# Upgrade meson and ninja to required versions
+echo -e "${BLUE}→ Upgrading meson and ninja to latest versions...${NC}"
+sudo pip3 install --upgrade meson ninja
+
+# Verify meson version
+MESON_VERSION=$(meson --version 2>/dev/null)
+echo -e "${GREEN}✓ Meson version: ${MESON_VERSION}${NC}"
+
+# Add pip binaries to PATH if not already there
+if ! command -v meson &> /dev/null; then
+    export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
+    echo 'export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"' >> ~/.bashrc
+fi
 
 # Build and install libvirt 11.8.0 from source
 echo -e "${YELLOW}[2/10] Building libvirt 11.8.0 LTS from source (this may take 10-20 minutes)...${NC}"
@@ -282,7 +296,11 @@ fi
 
 if [ "$SKIP_BUILD" != "true" ]; then
     echo -e "${BLUE}→ Configuring build...${NC}"
-    meson setup build \
+    # Use explicit meson path
+    MESON_BIN=$(which meson)
+    echo -e "${YELLOW}  Using meson: ${MESON_BIN}${NC}"
+    
+    $MESON_BIN setup build \
         --prefix=/usr \
         --sysconfdir=/etc \
         --localstatedir=/var \
@@ -292,6 +310,8 @@ if [ "$SKIP_BUILD" != "true" ]; then
         -Dstorage_disk=enabled \
         -Dstorage_dir=enabled || {
         echo -e "${RED}✗ Meson configuration failed!${NC}"
+        echo -e "${YELLOW}Meson version: $(meson --version)${NC}"
+        echo -e "${YELLOW}Required version: >= 0.57.0${NC}"
         cleanup_and_exit
     }
 
