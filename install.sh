@@ -8,7 +8,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 echo -e "${GREEN}=== VM Windows 10 LTSC Installation Script for Debian 11 ===${NC}\n"
-echo -e "${BLUE}With libvirt 11.8.0 LTS build from source and RDP Port Forwarding${NC}\n"
+echo -e "${BLUE}With libvirt 10.9.0 LTS build from source and RDP Port Forwarding${NC}\n"
 
 # Function for cleanup and exit
 cleanup_and_exit() {
@@ -254,10 +254,10 @@ if ! command -v meson &> /dev/null; then
     echo 'export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"' >> ~/.bashrc
 fi
 
-# Build and install libvirt 11.8.0 from source
-echo -e "${YELLOW}[2/10] Building libvirt 11.8.0 LTS from source (this may take 10-20 minutes)...${NC}"
+# Build and install libvirt 10.9.0 from source
+echo -e "${YELLOW}[2/10] Building libvirt 10.9.0 LTS from source (this may take 10-20 minutes)...${NC}"
 
-LIBVIRT_VERSION="11.8.0"
+LIBVIRT_VERSION="10.9.0"
 LIBVIRT_BUILD_DIR="/tmp/libvirt-build"
 
 # Remove old build directory if exists
@@ -340,6 +340,8 @@ if [ "$SKIP_BUILD" != "true" ]; then
     
     # Update library cache
     sudo ldconfig
+    
+    echo -e "${GREEN}✓ libvirt 10.9.0 LTS compiled and installed successfully${NC}"
 fi
 
 # Configure libvirt
@@ -567,7 +569,7 @@ echo -e "${GREEN}✓ VM started successfully with RDP forwarding enabled${NC}"
 
 # Access info
 echo -e "\n${GREEN}=== Installation Complete ===${NC}"
-echo -e "${GREEN}✅ libvirt ${INSTALLED_VERSION} (LTS 11.8.0) installed from source!${NC}"
+echo -e "${GREEN}✅ libvirt ${INSTALLED_VERSION} (LTS 10.9.0 - Compatible with Debian 11) installed from source!${NC}"
 echo -e "${GREEN}✅ VM created successfully!${NC}\n"
 
 echo -e "${YELLOW}═══════════════════════════════════════════════════${NC}"
