@@ -199,6 +199,7 @@ sudo apt update && sudo apt install -y \
     python3-setuptools \
     python3-wheel \
     python3-docutils \
+    libglib2.0-dev \
     libxml2-dev \
     libxml2-utils \
     libgnutls28-dev \
@@ -221,6 +222,16 @@ sudo apt update && sudo apt install -y \
     libtirpc-dev \
     libglusterfs-dev \
     libiscsi-dev \
+    librbd-dev \
+    librados-dev \
+    libfuse-dev \
+    libacl1-dev \
+    libattr1-dev \
+    libblkid-dev \
+    libparted-dev \
+    libapparmor-dev \
+    libnl-genl-3-dev \
+    bash-completion \
     xsltproc \
     qemu-kvm \
     qemu-utils \
