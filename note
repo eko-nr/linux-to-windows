@@ -1,21 +1,15 @@
 # ================= On windows powershell ================
+Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0
+Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
-# Run to command VNC to allow RDP
-reg add "HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f
-Set-Service -Name TermService -StartupType Automatic
-Start-Service -Name TermService
+# Enable firewall
+netsh advfirewall firewall set rule group="remote desktop" new enable=yes
 
-#Verify RDP Service is Running
-sc query TermService
+Get-NetFirewallRule -DisplayGroup "Remote Desktop"
 
-#Disable Network Level Authentication (NLA) - For Compatibility
-reg add "HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v UserAuthentication /t REG_DWORD /d 0 /f
-
-Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" -Name "LanAdapter" -Value 0
-
-#Configure Windows Firewall
-netsh advfirewall firewall set rule group="remote desktop" new enable=Yes
-netsh advfirewall firewall add rule name="ICMP Allow Incoming V4" protocol=icmpv4:8,any dir=in action=allow
+# User
+net user rdpuser Random!23 /add
+net localgroup "Remote Desktop Users" rdpuser /add
 
 #Check RDP
 netstat -ano | findstr :3389
