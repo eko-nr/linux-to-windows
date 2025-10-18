@@ -15,6 +15,7 @@ Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server\W
 
 #Configure Windows Firewall
 netsh advfirewall firewall set rule group="remote desktop" new enable=Yes
+netsh advfirewall firewall add rule name="ICMP Allow Incoming V4" protocol=icmpv4:8,any dir=in action=allow
 
 #Check RDP
 netstat -ano | findstr :3389
