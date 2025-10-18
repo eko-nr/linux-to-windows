@@ -135,30 +135,6 @@ if [[ ! -f "$ISO_FILE" ]]; then
 else ok "Using cached ISO: $ISO_FILE"; fi
 sudo ln -sf "$ISO_FILE" "$ISO_LINK"
 
-# --- Network with RDP Forwarding ---
-header "Configuring libvirt network with RDP forwarding"
-if ! sudo virsh net-list --all | grep -q "default-rdp"; then
-  cat <<EOF | sudo tee /tmp/default-rdp.xml >/dev/null
-<network>
-  <name>default-rdp</name>
-  <forward mode='nat'/>
-  <bridge name='virbr1' stp='on' delay='0'/>
-  <ip address='192.168.101.1' netmask='255.255.255.0'>
-    <dhcp>
-      <range start='192.168.101.2' end='192.168.101.254'/>
-    </dhcp>
-  </ip>
-  <port redirdev='tcp' name='rdp' hostport='3389' guestport='3389'/>
-</network>
-EOF
-  sudo virsh net-define /tmp/default-rdp.xml
-  sudo virsh net-autostart default-rdp
-  sudo virsh net-start default-rdp
-  ok "Network 'default-rdp' created with RDP forwarding"
-else
-  ok "Network 'default-rdp' already exists"
-fi
-
 # --- Create Disk ---
 header "Creating VM Disk"
 sudo mkdir -p /var/lib/libvirt/images
@@ -188,7 +164,7 @@ sudo virt-install \
   --cdrom "$ISO_LINK" \
   --disk path=/var/lib/libvirt/images/${VM_NAME}.img,size=${DISK_SIZE} \
   --os-variant win10 \
-  --network network=default-rdp \
+  --network network=default \
   --graphics vnc,listen=0.0.0.0,port=${VNC_PORT} \
   --boot cdrom,hd,menu=on \
   --check path_in_use=off \
@@ -198,7 +174,6 @@ sudo virt-install \
 header "Installation Complete"
 ok "VM ${VM_NAME} created successfully!"
 echo "VNC: $(hostname -I | awk '{print $1}'):${VNC_PORT}"
-echo "RDP: $(hostname -I | awk '{print $1}'):3389"
 echo ""
 echo "Cached ISO: ${ISO_FILE}"
 echo ""
