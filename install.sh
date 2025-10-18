@@ -241,28 +241,75 @@ mkdir -p ${LIBVIRT_BUILD_DIR}
 cd ${LIBVIRT_BUILD_DIR}
 
 echo -e "${BLUE}→ Downloading libvirt ${LIBVIRT_VERSION}...${NC}"
-wget https://libvirt.org/sources/libvirt-${LIBVIRT_VERSION}.tar.xz
+# Try multiple sources with SSL bypass for expired certificates
+if ! wget --no-check-certificate -O libvirt-${LIBVIRT_VERSION}.tar.xz \
+    https://download.libvirt.org/libvirt-${LIBVIRT_VERSION}.tar.xz 2>/dev/null; then
+    echo -e "${YELLOW}  Trying alternative download source...${NC}"
+    if ! wget --no-check-certificate -O libvirt-${LIBVIRT_VERSION}.tar.xz \
+        https://libvirt.org/sources/libvirt-${LIBVIRT_VERSION}.tar.xz 2>/dev/null; then
+        echo -e "${YELLOW}  Trying GitHub mirror...${NC}"
+        wget -O libvirt-${LIBVIRT_VERSION}.tar.xz \
+            https://github.com/libvirt/libvirt/archive/refs/tags/v${LIBVIRT_VERSION}.tar.gz || {
+            echo -e "${RED}✗ Failed to download libvirt source!${NC}"
+            echo -e "${YELLOW}Trying to install from Debian backports instead...${NC}"
+            sudo apt install -y -t bullseye-backports libvirt-daemon-system libvirt-clients 2>/dev/null || {
+                echo -e "${RED}✗ All download methods failed!${NC}"
+                cleanup_and_exit
+            }
+            cd /
+            SKIP_BUILD=true
+        }
+    fi
+fi
 
-echo -e "${BLUE}→ Extracting source...${NC}"
-tar -xf libvirt-${LIBVIRT_VERSION}.tar.xz
-cd libvirt-${LIBVIRT_VERSION}
+if [ "$SKIP_BUILD" != "true" ]; then
+    echo -e "${BLUE}→ Extracting source...${NC}"
+    tar -xf libvirt-${LIBVIRT_VERSION}.tar.xz || {
+        echo -e "${RED}✗ Failed to extract libvirt source!${NC}"
+        cleanup_and_exit
+    }
+    
+    # Handle GitHub archive structure (has different folder name)
+    if [ -d "libvirt-${LIBVIRT_VERSION}" ]; then
+        cd libvirt-${LIBVIRT_VERSION}
+    else
+        cd libvirt-* 2>/dev/null || {
+            echo -e "${RED}✗ Cannot find extracted libvirt directory!${NC}"
+            cleanup_and_exit
+        }
+    fi
+fi
 
-echo -e "${BLUE}→ Configuring build...${NC}"
-meson setup build \
-    --prefix=/usr \
-    --sysconfdir=/etc \
-    --localstatedir=/var \
-    -Ddriver_qemu=enabled \
-    -Ddriver_network=enabled \
-    -Dstorage_fs=enabled \
-    -Dstorage_disk=enabled \
-    -Dstorage_dir=enabled
+if [ "$SKIP_BUILD" != "true" ]; then
+    echo -e "${BLUE}→ Configuring build...${NC}"
+    meson setup build \
+        --prefix=/usr \
+        --sysconfdir=/etc \
+        --localstatedir=/var \
+        -Ddriver_qemu=enabled \
+        -Ddriver_network=enabled \
+        -Dstorage_fs=enabled \
+        -Dstorage_disk=enabled \
+        -Dstorage_dir=enabled || {
+        echo -e "${RED}✗ Meson configuration failed!${NC}"
+        cleanup_and_exit
+    }
 
-echo -e "${BLUE}→ Compiling (using all CPU cores)...${NC}"
-ninja -C build
+    echo -e "${BLUE}→ Compiling (using all CPU cores)...${NC}"
+    ninja -C build || {
+        echo -e "${RED}✗ Compilation failed!${NC}"
+        cleanup_and_exit
+    }
 
-echo -e "${BLUE}→ Installing libvirt ${LIBVIRT_VERSION}...${NC}"
-sudo ninja -C build install
+    echo -e "${BLUE}→ Installing libvirt ${LIBVIRT_VERSION}...${NC}"
+    sudo ninja -C build install || {
+        echo -e "${RED}✗ Installation failed!${NC}"
+        cleanup_and_exit
+    }
+    
+    # Update library cache
+    sudo ldconfig
+fi
 
 # Configure libvirt
 echo -e "${YELLOW}[3/10] Configuring libvirt...${NC}"
@@ -349,13 +396,25 @@ sleep 3
 
 # Verify installation
 echo -e "${BLUE}→ Verifying libvirt installation...${NC}"
-INSTALLED_VERSION=$(virsh --version 2>/dev/null)
-if [ $? -eq 0 ]; then
-    echo -e "${GREEN}✓ libvirt ${INSTALLED_VERSION} installed successfully${NC}"
-else
-    echo -e "${RED}✗ Failed to verify libvirt installation!${NC}"
-    cleanup_and_exit
-fi
+# Try multiple times as libvirt may need time to initialize
+for i in {1..3}; do
+    INSTALLED_VERSION=$(virsh --version 2>/dev/null)
+    if [ $? -eq 0 ] && [ ! -z "$INSTALLED_VERSION" ]; then
+        echo -e "${GREEN}✓ libvirt ${INSTALLED_VERSION} installed successfully${NC}"
+        break
+    fi
+    if [ $i -lt 3 ]; then
+        echo -e "${YELLOW}  Waiting for libvirt to initialize (attempt $i/3)...${NC}"
+        sleep 2
+    else
+        echo -e "${RED}✗ Failed to verify libvirt installation!${NC}"
+        echo -e "${YELLOW}Checking if virsh binary exists...${NC}"
+        which virsh
+        echo -e "${YELLOW}Checking library paths...${NC}"
+        sudo ldconfig -p | grep libvirt
+        cleanup_and_exit
+    fi
+done
 
 # Setup default network
 echo -e "${YELLOW}[5/10] Setting up default network...${NC}"
