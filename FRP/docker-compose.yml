@@ -1,6 +1,6 @@
 services:
   frps:
-    image: fatedier/frps:v0.65.0
+    image: snowdreamtech/frps:latest
     container_name: frps
     restart: unless-stopped
     ports:
