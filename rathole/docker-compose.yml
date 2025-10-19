@@ -1,6 +1,6 @@
 services:
   rathole-server:
-    image: gztime/rathole:latest
+    image: rapiz1/rathole:latest
     container_name: rathole-server
     restart: unless-stopped
     ports:
