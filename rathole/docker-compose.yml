@@ -1,11 +1,11 @@
 services:
   rathole-server:
-    image: rathole-org/rathole:latest
+    image: gztime/rathole:latest
     container_name: rathole-server
     restart: unless-stopped
     ports:
-      - "2333:2333/tcp"   # control port
-      - "3889:3389/tcp" 
+      - "2333:2333/tcp"
+      - "3889:3389/tcp"
       - "3889:3389/udp"
     volumes:
       - ./server.toml:/etc/rathole/server.toml:ro
