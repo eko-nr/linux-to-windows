@@ -1,3 +1,4 @@
+version: "3.8"
 services:
   rathole-server:
     image: rapiz1/rathole:latest
@@ -10,5 +11,4 @@ services:
     volumes:
       - ./server.toml:/etc/rathole/server.toml:ro
       - /var/log/rathole:/var/log
-    command: ["rathole", "/etc/rathole/server.toml"]
-
+    command: ["rathole", "-c", "/etc/rathole/server.toml"]
