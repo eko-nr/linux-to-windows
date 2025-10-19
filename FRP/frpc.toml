@@ -12,7 +12,7 @@ name = "rdp"
 type = "tcp"
 local_ip = "127.0.0.1"
 local_port = 3389
-remote_port = 6000
+remote_port = 3389
 use_encryption = false
 use_compression = false
 
