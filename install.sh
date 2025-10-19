@@ -131,7 +131,7 @@ ISO_LINK="/var/lib/libvirt/boot/Windows10-Ltsc.iso"
 sudo mkdir -p "$ISO_CACHE" /var/lib/libvirt/boot
 if [[ ! -f "$ISO_FILE" ]]; then
   step "Downloading Windows 10 LTSC ISO..."
-  sudo wget -O "$ISO_FILE" "https://archive.org/download/windows-10-lite/Windows%2010%20Lite%20.iso"
+  sudo wget -O "$ISO_FILE" "https://archive.org/download/windows-10-ltsc-enterprise-feb-2019/17763.2028/Windows_10__ENT_LTSC_OEM-June_x64_multilingual%5B17763.2028%5D.iso"
 else ok "Using cached ISO: $ISO_FILE"; fi
 sudo ln -sf "$ISO_FILE" "$ISO_LINK"
 
