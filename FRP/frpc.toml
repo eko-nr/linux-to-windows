@@ -1,17 +1,15 @@
-server_addr = "YOUR_FRP_SERVER"
+server_addr = "40.160.5.97"
 server_port = 7000
 token = "X8u#4qPz7!vA9LmR2$yT6eG0bNfZ1hS"
 
 [[proxies]]
-name = "rdp"
+name = "rdp_tcp"
 type = "tcp"
-local_ip = "127.0.0.1"
-local_port = 3389
+local_addr = "127.0.0.1:3389"
 remote_port = 3389
 
 [[proxies]]
 name = "rdp_udp"
 type = "udp"
-local_ip = "127.0.0.1"
-local_port = 3389
+local_addr = "127.0.0.1:3389"
 remote_port = 3389
