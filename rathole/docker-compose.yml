@@ -1,0 +1,12 @@
+services:
+  rathole-server:
+    build: .
+    container_name: rathole-server
+    restart: unless-stopped
+    ports:
+      - "2333:2333/tcp"   # Control channel
+      - "3889:3389/tcp"   # RDP TCP
+      - "3889:3389/udp"   # Optional UDP
+    volumes:
+      - ./server.toml:/etc/rathole/server.toml:ro
+      - /var/log/rathole:/var/log
