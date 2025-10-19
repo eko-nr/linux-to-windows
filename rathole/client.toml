@@ -2,10 +2,11 @@
 remote_addr = "40.160.5.97:2333"
 
 [client.services.rdp_tcp]
+type = "tcp"
 local_addr = "127.0.0.1:3389"
 token = "token"
 
 [client.services.rdp_udp]
+type = "udp"
 local_addr = "127.0.0.1:3389"
-protocol = "udp"
 token = "token"
