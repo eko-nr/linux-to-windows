@@ -1,0 +1,10 @@
+services:
+  frps:
+    image: snowdreamtech/frps:latest
+    container_name: frps
+    restart: unless-stopped
+    ports:
+      - "7000:7000/tcp"     # Port untuk kontrol channel FRP
+      - "3389:3389/tcp"     # Port publik yang akan diteruskan ke VM Windows
+    volumes:
+      - ./frps.ini:/etc/frp/frps.ini
