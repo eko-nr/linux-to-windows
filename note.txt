@@ -3,7 +3,8 @@ Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" 
 Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
 # Enable firewall
-netsh advfirewall firewall set rule group="remote desktop" new enable=yes
+netsh advfirewall firewall add rule name="Allow RDP TCP" dir=in action=allow protocol=TCP localport=3389
+netsh advfirewall firewall add rule name="Allow RDP UDP" dir=in action=allow protocol=UDP localport=3389
 
 Get-NetFirewallRule -DisplayGroup "Remote Desktop"
 
