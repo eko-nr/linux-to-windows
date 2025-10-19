@@ -10,4 +10,5 @@ services:
     volumes:
       - ./server.toml:/etc/rathole/server.toml:ro
       - /var/log/rathole:/var/log
-    command: ["rathole", "server", "-c", "/etc/rathole/server.toml"]
+    command: ["rathole", "/etc/rathole/server.toml"]
+
