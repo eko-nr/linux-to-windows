@@ -1,12 +1,11 @@
+[common]
 bind_port = 7000
 token = "X8u#4qPz7!vA9LmR2$yT6eG0bNfZ1hS"
 
 dashboard_port = 7500
 dashboard_user = "admin"
 dashboard_pwd = "changeme"
+allow_ports = "3389-3389"
 
-allow_ports = ["3389-3389"]
-
-[log]
-file = "/var/log/frps.log"
-level = "info"
+log_file = "/var/log/frps.log"
+log_level = "info"
