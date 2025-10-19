@@ -1,7 +1,6 @@
 [common]
 server_addr = "40.160.5.97"
 server_port = 7000
-protocol = "tcp"
 tls_enable = false
 pool_count = 3
 login_fail_exit = false
@@ -13,15 +12,13 @@ name = "rdp"
 type = "tcp"
 local_ip = "127.0.0.1"
 local_port = 3389
-remote_port = 3389
+remote_port = 6000
 use_encryption = false
 use_compression = false
-proxy_protocol_version = "v2"
-transport = "kcp"
 
 # [[proxies]]
 # name = "rdp_udp"
 # type = "udp"
 # local_ip = "127.0.0.1"
 # local_port = 3389
-# remote_port = 3389
+# remote_port = 6001
