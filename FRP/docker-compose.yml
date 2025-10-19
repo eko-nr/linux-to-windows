@@ -9,3 +9,4 @@ services:
       - "7500:7500/tcp"
     volumes:
       - ./frps.toml:/etc/frp/frps.toml
+      - /var/log/frps:/var/log
