@@ -4,7 +4,10 @@ services:
     container_name: frps
     restart: unless-stopped
     ports:
-      - "7000:7000/tcp"     # Port untuk kontrol channel FRP
-      - "3389:3389/tcp"     # Port publik yang akan diteruskan ke VM Windows
+      - "7000:7000/tcp"
+      - "3389:3389/tcp"
+      - "7500:7500/tcp"
     volumes:
-      - ./frps.ini:/etc/frp/frps.ini
+      - ./frps.ini:/frp/frps.ini   # <<< ubah path mount ke /frp/
+    environment:
+      - FRPS_CONFIG_FILE=/frp/frps.ini
