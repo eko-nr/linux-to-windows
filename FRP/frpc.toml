@@ -8,3 +8,9 @@ type = "tcp"
 local_ip = "127.0.0.1"
 local_port = 3389
 remote_port = 3389
+
+[rdp_udp]
+type = "udp"
+local_ip = "127.0.0.1"
+local_port = 3389
+remote_port = 3389

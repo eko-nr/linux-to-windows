@@ -1,0 +1,13 @@
+services:
+  rathole-server:
+    image: rathole-org/rathole:latest
+    container_name: rathole-server
+    restart: unless-stopped
+    ports:
+      - "2333:2333/tcp"
+      - "3389:3389/tcp"
+      - "3389:3389/udp"
+    volumes:
+      - ./server.toml:/etc/rathole/server.toml:ro
+      - /var/log/rathole:/var/log
+    command: ["rathole", "server", "-c", "/etc/rathole/server.toml"]

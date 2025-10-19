@@ -6,6 +6,7 @@ services:
     ports:
       - "7000:7000/tcp"
       - "3389:3389/tcp"
+      - "3389:3389/udp"
       - "7500:7500/tcp"
     volumes:
       - ./frps.toml:/etc/frp/frps.toml
