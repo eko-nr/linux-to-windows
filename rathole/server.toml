@@ -1,13 +1,12 @@
 [server]
 bind_addr = "0.0.0.0:2333"
+
 log_file = "/var/log/rathole/server.log"
 log_level = "info"
 
 [server.services.rdp_tcp]
-token = "X8u#4qPz7!vA9LmR2$yT6eG0bNfZ1hS"
 bind_addr = "0.0.0.0:3389"
 
-[server.services.rdp_udp]
-token = "X8u#4qPz7!vA9LmR2$yT6eG0bNfZ1hS"
-bind_addr = "0.0.0.0:3389"
-protocol = "udp"
+# [server.services.rdp_udp]
+# bind_addr = "0.0.0.0:3389"
+# protocol = "udp"

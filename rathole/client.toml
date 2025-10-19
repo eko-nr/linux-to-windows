@@ -1,11 +1,9 @@
 [client]
-remote_addr = "VPS_PUBLIC_IP:2333"
+remote_addr = "40.160.5.97:2333"
 
 [client.services.rdp_tcp]
-token = "X8u#4qPz7!vA9LmR2$yT6eG0bNfZ1hS"
 local_addr = "127.0.0.1:3389"
 
-[client.services.rdp_udp]
-token = "X8u#4qPz7!vA9LmR2$yT6eG0bNfZ1hS"
-local_addr = "127.0.0.1:3389"
-protocol = "udp"
+# [client.services.rdp_udp]
+# local_addr = "127.0.0.1:3389"
+# protocol = "udp"
