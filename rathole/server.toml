@@ -5,7 +5,7 @@ bind_addr = "0.0.0.0:2333"
 bind_addr = "0.0.0.0:3389"
 token = "token"
 
-# [server.services.rdp_udp]
-# bind_addr = "0.0.0.0:3389"
-# protocol = "udp"
-# token = "SuperSecret123!"
+[server.services.rdp_udp]
+bind_addr = "0.0.0.0:3389"
+protocol = "udp"
+token = "token"
