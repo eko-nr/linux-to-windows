@@ -8,6 +8,4 @@ services:
       - "3389:3389/tcp"
       - "7500:7500/tcp"
     volumes:
-      - ./frps.ini:/frp/frps.ini   # <<< ubah path mount ke /frp/
-    environment:
-      - FRPS_CONFIG_FILE=/frp/frps.ini
+      - ./frps.toml:/etc/frp/frps.toml
