@@ -60,7 +60,8 @@ sudo apt install -y \
  libyajl-dev libcurl4-gnutls-dev libglib2.0-dev libpciaccess-dev \
  libcap-ng-dev libselinux1-dev libsystemd-dev libapparmor-dev \
  libjson-c-dev libxslt1-dev xsltproc gettext libreadline-dev \
- libncurses5-dev libtirpc-dev python3-docutils
+ libncurses5-dev libtirpc-dev python3-docutils \
+ libgnutls28-dev gnutls-bin
 
 # --- libvirt check ---
 header "Checking libvirt/virsh"
