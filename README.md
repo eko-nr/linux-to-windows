@@ -26,18 +26,7 @@ git clone https://github.com/eko-nr/linux-to-windows
 cd linux-to-windows
 ```
 
-### 2. Grant Execute Permissions
-```bash
-chmod +x install.sh
-chmod +x enable_port_forward_rdp.sh
-chmod +x start_vm.sh
-chmod +x stop_vm.sh
-chmod +x uninstall_vm.sh
-chmod +x partition.sh
-chmod +x limits.sh
-```
-
-### 3. Run Installer
+### 2. Run Installer
 ```bash
 bash install.sh
 ```
