@@ -215,6 +215,19 @@ if [[ ! -f "$ISO_FILE" ]]; then
 else ok "Using cached ISO: $ISO_FILE"; fi
 sudo ln -sf "$ISO_FILE" "$ISO_LINK"
 
+# --- Download virtio drivers ---
+header "Preparing virtio Drivers"
+VIRTIO_FILE="${ISO_CACHE}/virtio-win.iso"
+VIRTIO_LINK="/var/lib/libvirt/boot/virtio-win.iso"
+if [[ ! -f "$VIRTIO_FILE" ]]; then
+  step "Downloading latest virtio-win drivers..."
+  sudo wget -O "$VIRTIO_FILE" "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/latest-virtio/virtio-win.iso"
+  ok "virtio drivers downloaded"
+else 
+  ok "Using cached virtio drivers: $VIRTIO_FILE"
+fi
+sudo ln -sf "$VIRTIO_FILE" "$VIRTIO_LINK"
+
 # --- Create Disk ---
 header "Creating VM Disk"
 sudo mkdir -p /var/lib/libvirt/images
@@ -245,13 +258,34 @@ sudo virt-install \
   --ram ${RAM_SIZE} \
   --vcpus ${VCPU_COUNT} \
   --cdrom "$ISO_LINK" \
-  --disk path=/var/lib/libvirt/images/${VM_NAME}.img,size=${DISK_SIZE} \
+  --disk path=/var/lib/libvirt/images/${VM_NAME}.img,size=${DISK_SIZE},bus=virtio \
   --os-variant win10 \
-  --network network=default \
+  --network network=default,model=virtio \
   --graphics vnc,listen=0.0.0.0,port=${VNC_PORT} \
   --boot cdrom,hd,menu=on \
+  --disk "$VIRTIO_LINK",device=cdrom \
   --check path_in_use=off \
   --noautoconsole
+
+# --- Upgrade NIC to virtio ---
+header "Upgrading Network Interface to virtio"
+step "Stopping VM to modify configuration..."
+sudo virsh destroy ${VM_NAME} 2>/dev/null || true
+sleep 2
+
+step "Changing NIC model to virtio for better performance..."
+sudo virt-xml ${VM_NAME} --edit --network model=virtio
+ok "Network interface upgraded to virtio"
+
+# --- Upgrade NIC to virtio ---
+header "Upgrading Network Interface to virtio"
+step "Stopping VM to modify configuration..."
+sudo virsh destroy ${VM_NAME} 2>/dev/null || true
+sleep 2
+
+step "Changing NIC model to virtio for better performance..."
+sudo virt-xml ${VM_NAME} --edit --network model=virtio
+ok "Network interface upgraded to virtio"
 
 # --- Finish ---
 header "Installation Complete"
@@ -261,6 +295,20 @@ echo "System Resources:"
 echo "  Total RAM: ${TOTAL_RAM_MB} MB → Allocated: ${RAM_SIZE} MB (${RAM_PERCENT}%)"
 echo "  Total CPUs: ${TOTAL_CPUS} → Allocated: ${VCPU_COUNT} vCPUs"
 echo "  Free Disk: ${FREE_DISK_GB} GB → Allocated: ${DISK_SIZE} GB"
+echo ""
+echo -e "${GREEN}╔════════════════════════════════════════════════════════════════╗${NC}"
+echo -e "${GREEN}║                    IMPORTANT NOTICE                            ║${NC}"
+echo -e "${GREEN}╚════════════════════════════════════════════════════════════════╝${NC}"
+echo -e "${YELLOW}⚠ VM uses virtio drivers for maximum performance${NC}"
+echo -e "${YELLOW}⚠ virtio-win.iso is attached as second CD-ROM${NC}"
+echo ""
+echo -e "${BLUE}During Windows installation:${NC}"
+echo -e "  1. When asked 'Where do you want to install Windows?'"
+echo -e "  2. Click ${YELLOW}'Load driver'${NC}"
+echo -e "  3. Browse to ${YELLOW}CD Drive (virtio-win)${NC} → ${YELLOW}viostor\\w10\\amd64${NC}"
+echo -e "  4. Install the storage driver to see your disk"
+echo -e "  5. After Windows installs, go to Device Manager"
+echo -e "  6. Install network driver from ${YELLOW}virtio-win CD:\\NetKVM\\w10\\amd64${NC}"
 echo ""
 echo -e "${GREEN}╔════════════════════════════════════════════════════════════════╗${NC}"
 echo -e "${GREEN}║                    VNC CONNECTION INFO                         ║${NC}"
