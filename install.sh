@@ -254,38 +254,29 @@ sudo virsh net-autostart default
 # --- Create VM ---
 header "Creating Virtual Machine"
 sudo virt-install \
-  --name ${VM_NAME} \
-  --ram ${RAM_SIZE} \
-  --vcpus ${VCPU_COUNT} \
-  --cdrom "$ISO_LINK" \
-  --disk path=/var/lib/libvirt/images/${VM_NAME}.img,size=${DISK_SIZE},bus=virtio \
+  --name "${VM_NAME}" \
+  --ram "${RAM_SIZE}" \
+  --vcpus "${VCPU_COUNT}" \
+  --cdrom "${ISO_LINK}" \
+  --disk path="/var/lib/libvirt/images/${VM_NAME}.img",size="${DISK_SIZE}",bus=virtio,cache=writeback,io=native,discard=unmap \
   --os-variant win10 \
   --network network=default,model=virtio \
-  --graphics vnc,listen=0.0.0.0,port=${VNC_PORT} \
+  --graphics vnc,listen=0.0.0.0,port="${VNC_PORT}" \
   --boot cdrom,hd,menu=on \
-  --disk "$VIRTIO_LINK",device=cdrom \
+  --disk "${VIRTIO_LINK}",device=cdrom \
   --check path_in_use=off \
   --noautoconsole
 
-# --- Upgrade NIC to virtio ---
-header "Upgrading Network Interface to virtio"
-step "Stopping VM to modify configuration..."
-sudo virsh destroy ${VM_NAME} 2>/dev/null || true
-sleep 2
+# --- Ensure vhost_net module is loaded on the host ---
+echo "🔧 Checking for vhost_net module on host..."
+if ! lsmod | grep -q vhost_net; then
+  echo "➡️  Loading vhost_net kernel module..."
+  sudo modprobe vhost_net
+fi
 
-step "Changing NIC model to virtio for better performance..."
-sudo virt-xml ${VM_NAME} --edit --network model=virtio
-ok "Network interface upgraded to virtio"
-
-# --- Upgrade NIC to virtio ---
-header "Upgrading Network Interface to virtio"
-step "Stopping VM to modify configuration..."
-sudo virsh destroy ${VM_NAME} 2>/dev/null || true
-sleep 2
-
-step "Changing NIC model to virtio for better performance..."
-sudo virt-xml ${VM_NAME} --edit --network model=virtio
-ok "Network interface upgraded to virtio"
+# --- Add vhost driver and multiqueue according to vCPU count ---
+echo "⚙️  Enabling vhost accelerator and multiqueue (${VCPU_COUNT} queues)..."
+sudo virt-xml "${VM_NAME}" --edit --network driver_name=vhost,driver_queues="${VCPU_COUNT}"
 
 # --- Finish ---
 header "Installation Complete"
