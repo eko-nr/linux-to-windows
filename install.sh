@@ -94,11 +94,18 @@ echo "Allocated Disk: ${DISK_SIZE} GB"
 # VNC port
 read -p "VNC port [5901]: " VNC_PORT; VNC_PORT=${VNC_PORT:-5901}
 
-# Swap size (auto-calculate based on RAM)
-SWAP_SIZE=$(( RAM_SIZE / 1024 ))
-if (( SWAP_SIZE < 2 )); then SWAP_SIZE=2; fi
-if (( SWAP_SIZE > 8 )); then SWAP_SIZE=8; fi
-echo "Auto-calculated Swap: ${SWAP_SIZE} GB"
+# Swap size (fixed GB)
+read -p "Swap size in GB [4]: " SWAP_SIZE
+SWAP_SIZE=${SWAP_SIZE:-4}
+if (( SWAP_SIZE < 1 )); then
+  warn "Swap size too small, setting to 1GB minimum"
+  SWAP_SIZE=1
+fi
+if (( SWAP_SIZE > 16 )); then
+  warn "Swap size too large, setting to 16GB maximum"
+  SWAP_SIZE=16
+fi
+echo "Allocated Swap: ${SWAP_SIZE} GB"
 
 # --- Dependencies ---
 header "Installing dependencies"
