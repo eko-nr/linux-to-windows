@@ -41,7 +41,7 @@ bash install.sh
 | `stop_vm.sh` | Stop/shutdown the VM |
 | `uninstall_vm.sh` | Uninstall/remove VM and its data |
 | `partition.sh` | Disk partitioning utility |
-| `limits.sh` | Resource limiting utility |
+| `limit.sh` | Resource limiting utility |
 
 ## ⚙️ VM Configuration
 
