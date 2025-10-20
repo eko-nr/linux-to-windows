@@ -1,4 +1,5 @@
 #!/bin/bash
+
 set -e
 
 echo "=== [ Enable Port Forwarding for RDP - Debian ] ==="
@@ -16,15 +17,50 @@ PUB_IP=$(ip -4 addr show dev "$PUB_IF" | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | h
 echo "Detected public interface: $PUB_IF ($PUB_IP)"
 echo
 
-# 2️⃣ Ask for Windows VM IP
-read -p "Enter your Windows VM IP (e.g., 192.168.122.194): " VM_IP
-if [[ -z "$VM_IP" ]]; then
-    echo "❌ Windows VM IP cannot be empty!"
+# 2️⃣ Detect active VMs and their IPs via virsh
+echo "Scanning for active VMs and their IPs..."
+VM_LIST=$(virsh list --name)
+if [ -z "$VM_LIST" ]; then
+    echo "❌ No running VMs detected. Start your Windows VM first!"
+    exit 1
+fi
+
+declare -A VM_IPS
+while read -r VM; do
+    if [ -n "$VM" ]; then
+        IP=$(virsh domifaddr "$VM" 2>/dev/null | awk '/ipv4/ {print $4}' | cut -d'/' -f1 | head -n1)
+        if [ -n "$IP" ]; then
+            VM_IPS["$VM"]="$IP"
+        fi
+    fi
+done <<< "$VM_LIST"
+
+if [ ${#VM_IPS[@]} -eq 0 ]; then
+    echo "❌ No VM IPs detected. Ensure the VMs have network connectivity and Guest Agent is installed."
+    exit 1
+fi
+
+echo
+echo "Detected VM IP addresses:"
+i=1
+for VM in "${!VM_IPS[@]}"; do
+    echo " [$i] $VM → ${VM_IPS[$VM]}"
+    VM_NAMES[$i]="$VM"
+    ((i++))
+done
+
+read -p "Select VM number to forward RDP to: " CHOICE
+VM_NAME=${VM_NAMES[$CHOICE]}
+VM_IP=${VM_IPS[$VM_NAME]}
+
+if [ -z "$VM_IP" ]; then
+    echo "❌ Invalid selection."
     exit 1
 fi
 
 RDP_PORT=3389
-echo "Forwarding RDP from $PUB_IP:$RDP_PORT → $VM_IP:$RDP_PORT"
+echo
+echo "Forwarding RDP from $PUB_IP:$RDP_PORT → $VM_NAME ($VM_IP:$RDP_PORT)"
 echo
 
 # 3️⃣ Enable IP forwarding
@@ -81,6 +117,8 @@ systemctl restart nftables
 
 echo
 echo "✅ Port forwarding is now active!"
-echo "Public RDP: $PUB_IP:$RDP_PORT → Windows VM: $VM_IP:$RDP_PORT"
-echo "You can now connect via Remote Desktop to: $PUB_IP"
+echo "Public RDP: $PUB_IP:$RDP_PORT → VM: $VM_NAME ($VM_IP:$RDP_PORT)"
+echo
+echo "⚠️ NOTE: Make sure RDP is enabled and running inside the Windows VM,"
+echo "         and that the Windows firewall allows incoming RDP connections."
 echo
