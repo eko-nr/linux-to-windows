@@ -1,6 +1,7 @@
 #!/bin/bash
 # ============================================================
 # Windows 10 LTSC Installer for Debian 13 (Trixie)
+# Auto-detect system resources
 # ============================================================
 
 set -euo pipefail
@@ -41,14 +42,60 @@ if systemd-detect-virt | grep -qE 'lxc|docker|openvz|container'; then
   err "Running inside container — KVM unavailable."; cleanup_and_exit
 fi
 
+# --- Detect System Resources ---
+header "Detecting System Resources"
+
+# Detect total physical RAM (in MB)
+TOTAL_RAM_MB=$(free -m | awk '/^Mem:/ {print $2}')
+echo "Total Physical RAM: ${TOTAL_RAM_MB} MB"
+
+# Detect total CPU cores
+TOTAL_CPUS=$(nproc)
+echo "Total CPU Cores: ${TOTAL_CPUS}"
+
+# Detect total disk space on root partition (in GB)
+TOTAL_DISK_GB=$(df -BG / | awk 'NR==2 {print $2}' | sed 's/G//')
+FREE_DISK_GB=$(df -BG / | awk 'NR==2 {print $4}' | sed 's/G//')
+echo "Total Disk Space: ${TOTAL_DISK_GB} GB (Free: ${FREE_DISK_GB} GB)"
+
 # --- VM Config ---
 header "VM Configuration"
 read -p "VM name [win10ltsc]: " VM_NAME; VM_NAME=${VM_NAME:-win10ltsc}
-read -p "RAM (MB) [4096]: " RAM_SIZE; RAM_SIZE=${RAM_SIZE:-4096}
-read -p "vCPU [2]: " VCPU_COUNT; VCPU_COUNT=${VCPU_COUNT:-2}
-read -p "Disk size (GB) [50]: " DISK_SIZE; DISK_SIZE=${DISK_SIZE:-50}
+
+# RAM configuration (percentage)
+read -p "RAM allocation (% of ${TOTAL_RAM_MB}MB) [50]: " RAM_PERCENT
+RAM_PERCENT=${RAM_PERCENT:-50}
+RAM_SIZE=$(( TOTAL_RAM_MB * RAM_PERCENT / 100 ))
+echo "Allocated RAM: ${RAM_SIZE} MB (${RAM_PERCENT}% of total)"
+
+# CPU configuration (auto-detect max)
+MAX_VCPU=$TOTAL_CPUS
+read -p "vCPU count (max: ${MAX_VCPU}) [2]: " VCPU_COUNT
+VCPU_COUNT=${VCPU_COUNT:-2}
+if (( VCPU_COUNT > MAX_VCPU )); then
+  warn "Requested ${VCPU_COUNT} vCPUs exceeds maximum ${MAX_VCPU}, setting to ${MAX_VCPU}"
+  VCPU_COUNT=$MAX_VCPU
+fi
+echo "Allocated vCPUs: ${VCPU_COUNT}"
+
+# Disk configuration (percentage)
+read -p "Disk size (% of ${FREE_DISK_GB}GB free) [30]: " DISK_PERCENT
+DISK_PERCENT=${DISK_PERCENT:-30}
+DISK_SIZE=$(( FREE_DISK_GB * DISK_PERCENT / 100 ))
+if (( DISK_SIZE < 20 )); then
+  warn "Calculated disk size (${DISK_SIZE}GB) is too small, setting to 20GB minimum"
+  DISK_SIZE=20
+fi
+echo "Allocated Disk: ${DISK_SIZE} GB (${DISK_PERCENT}% of free space)"
+
+# VNC port
 read -p "VNC port [5901]: " VNC_PORT; VNC_PORT=${VNC_PORT:-5901}
-read -p "Swap size (GB) [4]: " SWAP_SIZE; SWAP_SIZE=${SWAP_SIZE:-4}
+
+# Swap size (auto-calculate based on RAM)
+SWAP_SIZE=$(( RAM_SIZE / 1024 ))
+if (( SWAP_SIZE < 2 )); then SWAP_SIZE=2; fi
+if (( SWAP_SIZE > 8 )); then SWAP_SIZE=8; fi
+echo "Auto-calculated Swap: ${SWAP_SIZE} GB"
 
 # --- Dependencies ---
 header "Installing dependencies"
@@ -156,6 +203,9 @@ fi
 sudo systemctl restart libvirtd
 ok "AppArmor disabled for libvirt (using security_driver=none)"
 
+sudo virsh net-start default 2>/dev/null || true
+sudo virsh net-autostart default
+
 # --- Create VM ---
 header "Creating Virtual Machine"
 sudo virt-install \
@@ -174,8 +224,13 @@ sudo virt-install \
 # --- Finish ---
 header "Installation Complete"
 ok "VM ${VM_NAME} created successfully!"
-echo "VNC: $(hostname -I | awk '{print $1}'):${VNC_PORT}"
 echo ""
+echo "System Resources:"
+echo "  Total RAM: ${TOTAL_RAM_MB} MB → Allocated: ${RAM_SIZE} MB (${RAM_PERCENT}%)"
+echo "  Total CPUs: ${TOTAL_CPUS} → Allocated: ${VCPU_COUNT} vCPUs"
+echo "  Free Disk: ${FREE_DISK_GB} GB → Allocated: ${DISK_SIZE} GB (${DISK_PERCENT}%)"
+echo ""
+echo "VNC: $(hostname -I | awk '{print $1}'):${VNC_PORT}"
 echo "Cached ISO: ${ISO_FILE}"
 echo ""
 echo "Commands:"
