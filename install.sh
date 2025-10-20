@@ -78,15 +78,18 @@ if (( VCPU_COUNT > MAX_VCPU )); then
 fi
 echo "Allocated vCPUs: ${VCPU_COUNT}"
 
-# Disk configuration (percentage)
-read -p "Disk size (% of ${FREE_DISK_GB}GB free) [30]: " DISK_PERCENT
-DISK_PERCENT=${DISK_PERCENT:-30}
-DISK_SIZE=$(( FREE_DISK_GB * DISK_PERCENT / 100 ))
+# Disk configuration (fixed GB)
+read -p "Disk size in GB (max: ${FREE_DISK_GB}GB free) [50]: " DISK_SIZE
+DISK_SIZE=${DISK_SIZE:-50}
+if (( DISK_SIZE > FREE_DISK_GB )); then
+  warn "Requested ${DISK_SIZE}GB exceeds available ${FREE_DISK_GB}GB, setting to ${FREE_DISK_GB}GB"
+  DISK_SIZE=$FREE_DISK_GB
+fi
 if (( DISK_SIZE < 20 )); then
-  warn "Calculated disk size (${DISK_SIZE}GB) is too small, setting to 20GB minimum"
+  warn "Requested disk size (${DISK_SIZE}GB) is too small, setting to 20GB minimum"
   DISK_SIZE=20
 fi
-echo "Allocated Disk: ${DISK_SIZE} GB (${DISK_PERCENT}% of free space)"
+echo "Allocated Disk: ${DISK_SIZE} GB"
 
 # VNC port
 read -p "VNC port [5901]: " VNC_PORT; VNC_PORT=${VNC_PORT:-5901}
@@ -228,7 +231,7 @@ echo ""
 echo "System Resources:"
 echo "  Total RAM: ${TOTAL_RAM_MB} MB → Allocated: ${RAM_SIZE} MB (${RAM_PERCENT}%)"
 echo "  Total CPUs: ${TOTAL_CPUS} → Allocated: ${VCPU_COUNT} vCPUs"
-echo "  Free Disk: ${FREE_DISK_GB} GB → Allocated: ${DISK_SIZE} GB (${DISK_PERCENT}%)"
+echo "  Free Disk: ${FREE_DISK_GB} GB → Allocated: ${DISK_SIZE} GB"
 echo ""
 echo "VNC: $(hostname -I | awk '{print $1}'):${VNC_PORT}"
 echo "Cached ISO: ${ISO_FILE}"
