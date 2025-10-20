@@ -1,5 +1,4 @@
 #!/bin/bash
-
 set -e
 
 echo "=== [ Enable Port Forwarding for RDP - Debian ] ==="
@@ -60,7 +59,7 @@ fi
 
 RDP_PORT=3389
 echo
-echo "Forwarding RDP from $PUB_IP:$RDP_PORT → $VM_NAME ($VM_IP:$RDP_PORT)"
+echo "Forwarding RDP (TCP+UDP) from $PUB_IP:$RDP_PORT → $VM_NAME ($VM_IP:$RDP_PORT)"
 echo
 
 # 3️⃣ Enable IP forwarding
@@ -76,7 +75,7 @@ fi
 
 # 5️⃣ Write nftables configuration
 echo "Writing nftables configuration to /etc/nftables.conf ..."
-cat <<EOF > /etc/nftables.conf
+cat > /etc/nftables.conf <<EOF
 #!/usr/sbin/nft -f
 flush ruleset
 
@@ -101,6 +100,7 @@ table ip nat {
     chain prerouting {
         type nat hook prerouting priority 0;
         iif "$PUB_IF" tcp dport $RDP_PORT dnat to $VM_IP:$RDP_PORT
+        iif "$PUB_IF" udp dport $RDP_PORT dnat to $VM_IP:$RDP_PORT
     }
 
     chain postrouting {
@@ -120,5 +120,5 @@ echo "✅ Port forwarding is now active!"
 echo "Public RDP: $PUB_IP:$RDP_PORT → VM: $VM_NAME ($VM_IP:$RDP_PORT)"
 echo
 echo "⚠️ NOTE: Make sure RDP is enabled and running inside the Windows VM,"
-echo "         and that the Windows firewall allows incoming RDP connections."
+echo "         and that the Windows firewall allows incoming RDP (TCP + UDP) connections."
 echo
