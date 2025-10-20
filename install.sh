@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# Windows 10 LTSC Installer for Debian 13 (Trixie)
+# Windows 10 LTSC Installer for Debian 12+ / Ubuntu 22+
 # Auto-detect system resources
 # ============================================================
 
@@ -18,13 +18,35 @@ header "Checking OS"
 if [[ -f /etc/os-release ]]; then
   . /etc/os-release
   echo "Detected: $PRETTY_NAME"
-  if [[ "$ID" != "debian" ]]; then err "Only Debian supported"; cleanup_and_exit; fi
-  if (( ${VERSION_ID%%.*} < 12 )); then
-    warn "Script optimized for Debian 13 (Trixie)."
-    read -p "Continue anyway? (y/n): " RESP
-    [[ ! $RESP =~ ^[Yy]$ ]] && cleanup_and_exit
+  
+  # Check if OS is Debian or Ubuntu
+  if [[ "$ID" != "debian" ]] && [[ "$ID" != "ubuntu" ]]; then
+    err "Only Debian and Ubuntu are supported"
+    cleanup_and_exit
   fi
-else warn "Cannot detect OS"; fi
+  
+  # Version check for Debian
+  if [[ "$ID" == "debian" ]]; then
+    if (( ${VERSION_ID%%.*} < 12 )); then
+      err "Debian 12 (Bookworm) or higher is required. Detected: Debian ${VERSION_ID}"
+      cleanup_and_exit
+    fi
+    ok "Debian ${VERSION_ID} is supported"
+  fi
+  
+  # Version check for Ubuntu
+  if [[ "$ID" == "ubuntu" ]]; then
+    UBUNTU_MAJOR=$(echo "$VERSION_ID" | cut -d. -f1)
+    if (( UBUNTU_MAJOR < 22 )); then
+      err "Ubuntu 22.04 or higher is required. Detected: Ubuntu ${VERSION_ID}"
+      cleanup_and_exit
+    fi
+    ok "Ubuntu ${VERSION_ID} is supported"
+  fi
+else 
+  err "Cannot detect OS - /etc/os-release not found"
+  cleanup_and_exit
+fi
 
 # --- KVM check ---
 header "Checking KVM support"
@@ -240,10 +262,25 @@ echo "  Total RAM: ${TOTAL_RAM_MB} MB → Allocated: ${RAM_SIZE} MB (${RAM_PERCE
 echo "  Total CPUs: ${TOTAL_CPUS} → Allocated: ${VCPU_COUNT} vCPUs"
 echo "  Free Disk: ${FREE_DISK_GB} GB → Allocated: ${DISK_SIZE} GB"
 echo ""
-echo "VNC: $(hostname -I | awk '{print $1}'):${VNC_PORT}"
+echo -e "${GREEN}╔════════════════════════════════════════════════════════════════╗${NC}"
+echo -e "${GREEN}║                    VNC CONNECTION INFO                         ║${NC}"
+echo -e "${GREEN}╚════════════════════════════════════════════════════════════════╝${NC}"
+echo -e "${BLUE}→ VM is ready to accept VNC connections on:${NC}"
+echo -e "  ${YELLOW}$(hostname -I | awk '{print $1}'):${VNC_PORT}${NC}"
+echo ""
+echo -e "${GREEN}╔════════════════════════════════════════════════════════════════╗${NC}"
+echo -e "${GREEN}║                    RDP SETUP INSTRUCTIONS                      ║${NC}"
+echo -e "${GREEN}╚════════════════════════════════════════════════════════════════╝${NC}"
+echo -e "${YELLOW}To enable RDP access:${NC}"
+echo -e "  1. Connect to VM via VNC first"
+echo -e "  2. Inside Windows, enable Remote Desktop (RDP)"
+echo -e "  3. ${RED}Disable Windows Firewall${NC} to allow RDP connections"
+echo -e "  4. Run the port forwarding script:"
+echo -e "     ${BLUE}bash enable_port_forward_rdp.sh${NC}"
+echo ""
 echo "Cached ISO: ${ISO_FILE}"
 echo ""
-echo "Commands:"
+echo -e "${GREEN}VM Management Commands:${NC}"
 echo "  sudo virsh start ${VM_NAME}"
 echo "  sudo virsh shutdown ${VM_NAME}"
 echo "  sudo virsh destroy ${VM_NAME}"
