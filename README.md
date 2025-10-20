@@ -22,8 +22,8 @@ Automated installer for creating Windows 10 LTSC Virtual Machine on Debian 12+ o
 
 ### 1. Clone or Download Repository
 ```bash
-git clone <repository-url>
-cd <repository-folder>
+git clone https://github.com/eko-nr/linux-to-windows
+cd linux-to-windows
 ```
 
 ### 2. Grant Execute Permissions
