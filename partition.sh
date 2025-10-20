@@ -1,9 +1,5 @@
 #!/bin/bash
 
-# Script for automatic disk partitioning and mounting
-# Author: Assistant
-# Warning: Run with caution, can delete data!
-
 set -e
 
 # Colors for output
