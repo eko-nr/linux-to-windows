@@ -253,18 +253,22 @@ sudo virsh net-autostart default
 
 # --- Create VM ---
 header "Creating Virtual Machine"
+
 sudo virt-install \
   --name "${VM_NAME}" \
   --ram "${RAM_SIZE}" \
-  --vcpus "${VCPU_COUNT}" \
+  --vcpus "${VCPU_COUNT}",maxvcpus="${VCPU_COUNT}",sockets=1,cores="${VCPU_COUNT}",threads=1 \
+  --cpu host-passthrough,cache.mode=passthrough \
   --cdrom "${ISO_LINK}" \
-  --disk path="/var/lib/libvirt/images/${VM_NAME}.img",size="${DISK_SIZE}",bus=virtio,cache=writeback,io=native,discard=unmap \
+  --disk path="/var/lib/libvirt/images/${VM_NAME}.img",size="${DISK_SIZE}",bus=virtio,cache=none,io=threads,discard=unmap,detect_zeroes=unmap \
   --os-variant win10 \
   --network network=default,model=virtio \
   --graphics vnc,listen=0.0.0.0,port="${VNC_PORT}" \
   --boot cdrom,hd,menu=on \
-  --disk path="/var/lib/libvirt/images/${VM_NAME}.img",size="${DISK_SIZE}",bus=virtio,cache=none,io=native,discard=unmap \
+  --disk "${VIRTIO_LINK}",device=cdrom \
   --check path_in_use=off \
+  --features hyperv_relaxed=on,hyperv_vapic=on,hyperv_spinlocks=on,hyperv_spinlocks_retries=8191 \
+  --clock hypervclock_present=yes \
   --noautoconsole
 
 # --- Ensure vhost_net module is loaded on the host ---
