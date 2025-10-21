@@ -248,8 +248,51 @@ fi
 sudo systemctl restart libvirtd
 ok "AppArmor disabled for libvirt (using security_driver=none)"
 
-sudo virsh net-start default 2>/dev/null || true
-sudo virsh net-autostart default
+# --- Fix default network (FIXED: handles transient network error) ---
+header "Configuring default network"
+step "Ensuring default network is persistent..."
+
+# Stop and remove any existing default network (transient or not)
+sudo virsh net-destroy default 2>/dev/null || true
+sudo virsh net-undefine default 2>/dev/null || true
+
+# Create persistent default network configuration
+cat << 'EOF' | sudo tee /tmp/default-network.xml > /dev/null
+<network>
+  <name>default</name>
+  <forward mode='nat'/>
+  <bridge name='virbr0' stp='on' delay='0'/>
+  <ip address='192.168.122.1' netmask='255.255.255.0'>
+    <dhcp>
+      <range start='192.168.122.2' end='192.168.122.254'/>
+    </dhcp>
+  </ip>
+</network>
+EOF
+
+# Define network persistently
+sudo virsh net-define /tmp/default-network.xml
+ok "Default network defined"
+
+# Start network
+if sudo virsh net-start default 2>/dev/null; then
+  ok "Default network started"
+else
+  warn "Network already active"
+fi
+
+# Enable autostart (this should work now since network is persistent)
+if sudo virsh net-autostart default 2>/dev/null; then
+  ok "Default network set to autostart"
+else
+  warn "Could not set autostart (network may already be configured)"
+fi
+
+# Verify network status
+sudo virsh net-list --all
+
+# Cleanup temp file
+sudo rm -f /tmp/default-network.xml
 
 # --- Create VM with Performance Optimizations ---
 header "Creating Virtual Machine"
