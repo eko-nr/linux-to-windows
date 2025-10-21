@@ -273,22 +273,47 @@ sudo virt-install \
 
 # --- Configure Huge Pages on Host ---
 echo "⚡ Configuring huge pages for better memory performance..."
-HUGEPAGES_NEEDED=$(( (RAM_SIZE / 2) + 512 ))
-CURRENT_HUGEPAGES=$(cat /proc/sys/vm/nr_hugepages 2>/dev/null || echo 0)
 
-if (( CURRENT_HUGEPAGES < HUGEPAGES_NEEDED )); then
-  echo "Allocating ${HUGEPAGES_NEEDED} huge pages..."
-  echo ${HUGEPAGES_NEEDED} | sudo tee /proc/sys/vm/nr_hugepages
-  
-  # Make it permanent
-  if ! grep -q "vm.nr_hugepages" /etc/sysctl.conf 2>/dev/null; then
-    echo "vm.nr_hugepages=${HUGEPAGES_NEEDED}" | sudo tee -a /etc/sysctl.conf
-  else
-    sudo sed -i "s/^vm.nr_hugepages=.*/vm.nr_hugepages=${HUGEPAGES_NEEDED}/" /etc/sysctl.conf
-  fi
-  ok "Huge pages configured: ${HUGEPAGES_NEEDED}"
+# Calculate huge pages needed (each huge page = 2MB)
+# Formula: (VM_RAM_MB / 2) + small buffer
+HUGEPAGES_NEEDED=$(( (RAM_SIZE / 2) + 256 ))
+
+# Check available memory
+AVAILABLE_MEM_MB=$(free -m | awk '/^Mem:/ {print $7}')
+MAX_HUGEPAGES=$(( (AVAILABLE_MEM_MB - 512) / 2 ))  # Leave 512MB for host
+
+if (( HUGEPAGES_NEEDED > MAX_HUGEPAGES )); then
+  warn "Not enough free memory for ${HUGEPAGES_NEEDED} huge pages"
+  warn "Available: ${AVAILABLE_MEM_MB}MB, can allocate max ${MAX_HUGEPAGES} huge pages"
+  warn "Skipping huge pages configuration - VM will use normal pages"
+  SKIP_HUGEPAGES=true
 else
-  ok "Huge pages already configured: ${CURRENT_HUGEPAGES}"
+  CURRENT_HUGEPAGES=$(cat /proc/sys/vm/nr_hugepages 2>/dev/null || echo 0)
+  
+  if (( CURRENT_HUGEPAGES < HUGEPAGES_NEEDED )); then
+    echo "Allocating ${HUGEPAGES_NEEDED} huge pages..."
+    echo ${HUGEPAGES_NEEDED} | sudo tee /proc/sys/vm/nr_hugepages
+    
+    # Verify allocation succeeded
+    ACTUAL_HUGEPAGES=$(cat /proc/sys/vm/nr_hugepages)
+    if (( ACTUAL_HUGEPAGES < HUGEPAGES_NEEDED )); then
+      warn "Could only allocate ${ACTUAL_HUGEPAGES} huge pages (requested ${HUGEPAGES_NEEDED})"
+      warn "Skipping huge pages for VM - will use normal pages"
+      SKIP_HUGEPAGES=true
+    else
+      # Make it permanent only if successful
+      if ! grep -q "vm.nr_hugepages" /etc/sysctl.conf 2>/dev/null; then
+        echo "vm.nr_hugepages=${HUGEPAGES_NEEDED}" | sudo tee -a /etc/sysctl.conf
+      else
+        sudo sed -i "s/^vm.nr_hugepages=.*/vm.nr_hugepages=${HUGEPAGES_NEEDED}/" /etc/sysctl.conf
+      fi
+      ok "Huge pages configured: ${ACTUAL_HUGEPAGES}"
+      SKIP_HUGEPAGES=false
+    fi
+  else
+    ok "Huge pages already configured: ${CURRENT_HUGEPAGES}"
+    SKIP_HUGEPAGES=false
+  fi
 fi
 
 # --- Ensure vhost_net module is loaded on the host ---
@@ -307,42 +332,47 @@ echo "⚙️  Enabling vhost accelerator and multiqueue (${VCPU_COUNT} queues)..
 sudo virt-xml "${VM_NAME}" --edit --network driver_name=vhost,driver_queues="${VCPU_COUNT}"
 
 # --- Enable Huge Pages for VM ---
-echo "💾 Enabling huge pages for VM..."
-
-# Ensure VM is completely stopped
-if sudo virsh list --all | grep -q "${VM_NAME}.*running"; then
-  echo "Stopping VM gracefully..."
-  sudo virsh shutdown "${VM_NAME}" 2>/dev/null || true
+if [[ "$SKIP_HUGEPAGES" == "false" ]]; then
+  echo "💾 Enabling huge pages for VM..."
   
-  # Wait up to 30 seconds for clean shutdown
-  for i in {1..30}; do
-    if ! sudo virsh list --state-running | grep -q "${VM_NAME}"; then
-      break
+  # Ensure VM is completely stopped
+  if sudo virsh list --all | grep -q "${VM_NAME}.*running"; then
+    echo "Stopping VM gracefully..."
+    sudo virsh shutdown "${VM_NAME}" 2>/dev/null || true
+    
+    # Wait up to 30 seconds for clean shutdown
+    for i in {1..30}; do
+      if ! sudo virsh list --state-running | grep -q "${VM_NAME}"; then
+        break
+      fi
+      echo -n "."
+      sleep 1
+    done
+    echo ""
+    
+    # Force destroy if still running
+    if sudo virsh list --state-running | grep -q "${VM_NAME}"; then
+      echo "Force stopping VM..."
+      sudo virsh destroy "${VM_NAME}" 2>/dev/null || true
+      sleep 2
     fi
-    echo -n "."
-    sleep 1
-  done
-  echo ""
-  
-  # Force destroy if still running
-  if sudo virsh list --state-running | grep -q "${VM_NAME}"; then
-    echo "Force stopping VM..."
-    sudo virsh destroy "${VM_NAME}" 2>/dev/null || true
-    sleep 2
   fi
-fi
-
-# Verify VM is stopped
-if sudo virsh list --state-running | grep -q "${VM_NAME}"; then
-  err "Failed to stop VM, skipping huge pages configuration"
-else
-  sudo virt-xml "${VM_NAME}" --edit --memorybacking hugepages=on
-  ok "Huge pages enabled for VM"
   
-  # Start VM
-  echo "🚀 Starting VM with optimizations..."
-  sudo virsh start "${VM_NAME}"
-  ok "VM started successfully!"
+  # Verify VM is stopped
+  if sudo virsh list --state-running | grep -q "${VM_NAME}"; then
+    err "Failed to stop VM, skipping huge pages configuration"
+  else
+    sudo virt-xml "${VM_NAME}" --edit --memorybacking hugepages=on
+    ok "Huge pages enabled for VM"
+    
+    # Start VM
+    echo "🚀 Starting VM with optimizations..."
+    sudo virsh start "${VM_NAME}"
+    ok "VM started successfully!"
+  fi
+else
+  warn "Huge pages skipped - VM will use normal memory (still fast!)"
+  ok "VM is ready with all other optimizations enabled"
 fi
 
 # --- Finish ---
