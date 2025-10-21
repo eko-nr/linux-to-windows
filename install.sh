@@ -508,6 +508,93 @@ while (( CHECK_COUNT < MAX_CHECKS )); do
   sleep 10
 done
 
+# --- Auto Port Forwarding for RDP ---
+header "Auto Configuring RDP Port Forwarding"
+echo "⏳ Waiting for VM IP to appear..."
+
+VM_IP=""
+for i in {1..60}; do
+    VM_IP=$(sudo virsh domifaddr "${VM_NAME}" 2>/dev/null | awk '/ipv4/ {print $4}' | cut -d'/' -f1 | head -n1 || true)
+    if [[ -n "$VM_IP" ]]; then
+        echo "✅ Detected VM IP: $VM_IP"
+        break
+    fi
+    sleep 5
+done
+
+if [[ -z "$VM_IP" ]]; then
+    warn "VM IP not detected after 5 minutes. Skipping port forwarding."
+    exit 0
+fi
+
+echo ""
+echo "=== [ Enable Port Forwarding for RDP - Debian ] ==="
+PUB_IF=$(ip -4 route get 1.1.1.1 | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -n1)
+if [ -z "$PUB_IF" ]; then
+    err "Could not detect public network interface!"
+    echo "Please check using: ip a"
+    exit 1
+fi
+
+PUB_IP=$(ip -4 addr show dev "$PUB_IF" | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n1)
+echo "Detected public interface: $PUB_IF ($PUB_IP)"
+
+RDP_PORT=3389
+echo ""
+echo "Forwarding RDP (TCP+UDP) from $PUB_IP:$RDP_PORT → $VM_NAME ($VM_IP:$RDP_PORT)"
+echo ""
+
+# Enable IP forwarding
+sysctl -w net.ipv4.ip_forward=1 >/dev/null
+grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf || echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+
+# Ensure nftables installed
+if ! command -v nft >/dev/null 2>&1; then
+    echo "Installing nftables..."
+    apt-get update -qq && apt-get install -y nftables >/dev/null
+fi
+
+# Write nftables config
+cat > /etc/nftables.conf <<EOF
+#!/usr/sbin/nft -f
+flush ruleset
+
+table inet filter {
+    chain input {
+        type filter hook input priority 0;
+        policy accept;
+    }
+    chain forward {
+        type filter hook forward priority 0;
+        policy accept;
+    }
+    chain output {
+        type filter hook output priority 0;
+        policy accept;
+    }
+}
+
+table ip nat {
+    chain prerouting {
+        type nat hook prerouting priority 0;
+        iif "$PUB_IF" tcp dport $RDP_PORT dnat to $VM_IP:$RDP_PORT
+        iif "$PUB_IF" udp dport $RDP_PORT dnat to $VM_IP:$RDP_PORT
+    }
+    chain postrouting {
+        type nat hook postrouting priority 100;
+        oif "$PUB_IF" masquerade
+    }
+}
+EOF
+
+# Apply nftables
+systemctl enable nftables >/dev/null 2>&1 || true
+systemctl restart nftables
+
+ok "RDP Port forwarding active!"
+echo "🌐 Public RDP: ${PUB_IP}:${RDP_PORT} → VM: ${VM_IP}:${RDP_PORT}"
+echo "⚠️ Ensure RDP service is running inside Windows and firewall is off."
+
 echo ""
 if [[ "$INSTALL_COMPLETE" == "true" ]]; then
   header "Installation Complete!"
