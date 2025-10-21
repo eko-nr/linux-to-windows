@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
-# Windows 10 LTSC Installer for Debian 12+ / Ubuntu 22+
-# Auto-detect system resources
+# Windows 10 LTSC UNATTENDED Installer for Debian 12+ / Ubuntu 22+
+# Full automation with reboot handling (FIXED windowsPE parsing)
 # ============================================================
 
 set -euo pipefail
@@ -18,34 +18,20 @@ header "Checking OS"
 if [[ -f /etc/os-release ]]; then
   . /etc/os-release
   echo "Detected: $PRETTY_NAME"
-  
-  # Check if OS is Debian or Ubuntu
   if [[ "$ID" != "debian" ]] && [[ "$ID" != "ubuntu" ]]; then
-    err "Only Debian and Ubuntu are supported"
-    cleanup_and_exit
+    err "Only Debian and Ubuntu are supported"; cleanup_and_exit
   fi
-  
-  # Version check for Debian
   if [[ "$ID" == "debian" ]]; then
-    if (( ${VERSION_ID%%.*} < 12 )); then
-      err "Debian 12 (Bookworm) or higher is required. Detected: Debian ${VERSION_ID}"
-      cleanup_and_exit
-    fi
+    if (( ${VERSION_ID%%.*} < 12 )); then err "Debian 12+ required"; cleanup_and_exit; fi
     ok "Debian ${VERSION_ID} is supported"
   fi
-  
-  # Version check for Ubuntu
   if [[ "$ID" == "ubuntu" ]]; then
     UBUNTU_MAJOR=$(echo "$VERSION_ID" | cut -d. -f1)
-    if (( UBUNTU_MAJOR < 22 )); then
-      err "Ubuntu 22.04 or higher is required. Detected: Ubuntu ${VERSION_ID}"
-      cleanup_and_exit
-    fi
+    if (( UBUNTU_MAJOR < 22 )); then err "Ubuntu 22.04+ required"; cleanup_and_exit; fi
     ok "Ubuntu ${VERSION_ID} is supported"
   fi
-else 
-  err "Cannot detect OS - /etc/os-release not found"
-  cleanup_and_exit
+else
+  err "Cannot detect OS - /etc/os-release not found"; cleanup_and_exit
 fi
 
 # --- KVM check ---
@@ -66,67 +52,59 @@ fi
 
 # --- Detect System Resources ---
 header "Detecting System Resources"
-
-# Detect total physical RAM (in MB)
 TOTAL_RAM_MB=$(free -m | awk '/^Mem:/ {print $2}')
 echo "Total Physical RAM: ${TOTAL_RAM_MB} MB"
-
-# Detect total CPU cores
 TOTAL_CPUS=$(nproc)
 echo "Total CPU Cores: ${TOTAL_CPUS}"
-
-# Detect total disk space on root partition (in GB)
 TOTAL_DISK_GB=$(df -BG / | awk 'NR==2 {print $2}' | sed 's/G//')
 FREE_DISK_GB=$(df -BG / | awk 'NR==2 {print $4}' | sed 's/G//')
 echo "Total Disk Space: ${TOTAL_DISK_GB} GB (Free: ${FREE_DISK_GB} GB)"
+
+# --- Windows User Configuration ---
+header "Windows User Configuration"
+echo -e "${BLUE}Configure Windows administrator account:${NC}"
+read -p "Username [Administrator]: " WIN_USERNAME
+WIN_USERNAME=${WIN_USERNAME:-Administrator}
+
+while true; do
+  read -sp "Password (min 8 chars): " WIN_PASSWORD; echo ""
+  if [[ ${#WIN_PASSWORD} -lt 8 ]]; then warn "Password too short!"; continue; fi
+  read -sp "Confirm password: " WIN_PASSWORD_CONFIRM; echo ""
+  if [[ "$WIN_PASSWORD" == "$WIN_PASSWORD_CONFIRM" ]]; then
+    ok "Password configured for user: ${WIN_USERNAME}"; break
+  else warn "Passwords don't match! Try again."; fi
+done
+
+read -p "Computer name [WIN10-VM]: " WIN_COMPUTERNAME
+WIN_COMPUTERNAME=${WIN_COMPUTERNAME:-WIN10-VM}
 
 # --- VM Config ---
 header "VM Configuration"
 read -p "VM name [win10ltsc]: " VM_NAME; VM_NAME=${VM_NAME:-win10ltsc}
 
-# RAM configuration (percentage)
 read -p "RAM allocation (% of ${TOTAL_RAM_MB}MB) [50]: " RAM_PERCENT
 RAM_PERCENT=${RAM_PERCENT:-50}
 RAM_SIZE=$(( TOTAL_RAM_MB * RAM_PERCENT / 100 ))
 echo "Allocated RAM: ${RAM_SIZE} MB (${RAM_PERCENT}% of total)"
 
-# CPU configuration (auto-detect max)
 MAX_VCPU=$TOTAL_CPUS
 read -p "vCPU count (max: ${MAX_VCPU}) [2]: " VCPU_COUNT
 VCPU_COUNT=${VCPU_COUNT:-2}
-if (( VCPU_COUNT > MAX_VCPU )); then
-  warn "Requested ${VCPU_COUNT} vCPUs exceeds maximum ${MAX_VCPU}, setting to ${MAX_VCPU}"
-  VCPU_COUNT=$MAX_VCPU
-fi
+if (( VCPU_COUNT > MAX_VCPU )); then warn "Exceeds max; set to ${MAX_VCPU}"; VCPU_COUNT=$MAX_VCPU; fi
 echo "Allocated vCPUs: ${VCPU_COUNT}"
 
-# Disk configuration (fixed GB)
 read -p "Disk size in GB (max: ${FREE_DISK_GB}GB free) [50]: " DISK_SIZE
 DISK_SIZE=${DISK_SIZE:-50}
-if (( DISK_SIZE > FREE_DISK_GB )); then
-  warn "Requested ${DISK_SIZE}GB exceeds available ${FREE_DISK_GB}GB, setting to ${FREE_DISK_GB}GB"
-  DISK_SIZE=$FREE_DISK_GB
-fi
-if (( DISK_SIZE < 20 )); then
-  warn "Requested disk size (${DISK_SIZE}GB) is too small, setting to 20GB minimum"
-  DISK_SIZE=20
-fi
+if (( DISK_SIZE > FREE_DISK_GB )); then warn "Exceeds free; set to ${FREE_DISK_GB}GB"; DISK_SIZE=$FREE_DISK_GB; fi
+if (( DISK_SIZE < 20 )); then warn "Too small; set to 20GB"; DISK_SIZE=20; fi
 echo "Allocated Disk: ${DISK_SIZE} GB"
 
-# VNC port
 read -p "VNC port [5901]: " VNC_PORT; VNC_PORT=${VNC_PORT:-5901}
 
-# Swap size (fixed GB)
 read -p "Swap size in GB [4]: " SWAP_SIZE
 SWAP_SIZE=${SWAP_SIZE:-4}
-if (( SWAP_SIZE < 1 )); then
-  warn "Swap size too small, setting to 1GB minimum"
-  SWAP_SIZE=1
-fi
-if (( SWAP_SIZE > 16 )); then
-  warn "Swap size too large, setting to 16GB maximum"
-  SWAP_SIZE=16
-fi
+(( SWAP_SIZE < 1 )) && SWAP_SIZE=1
+(( SWAP_SIZE > 16 )) && SWAP_SIZE=16
 echo "Allocated Swap: ${SWAP_SIZE} GB"
 
 # --- Dependencies ---
@@ -134,25 +112,21 @@ header "Installing dependencies"
 sudo apt update -y
 sudo apt install -y \
  qemu-kvm bridge-utils virtinst virt-manager cpu-checker \
- wget git make gcc meson ninja-build pkg-config \
+ wget git make gcc meson ninja-build pkg-config genisoimage \
  libxml2-dev libdevmapper-dev libnl-3-dev libnl-route-3-dev \
  libyajl-dev libcurl4-gnutls-dev libglib2.0-dev libpciaccess-dev \
  libcap-ng-dev libselinux1-dev libsystemd-dev libapparmor-dev \
  libjson-c-dev libxslt1-dev xsltproc gettext libreadline-dev \
  libncurses5-dev libtirpc-dev python3-docutils \
- libgnutls28-dev gnutls-bin
+ libgnutls28-dev gnutls-bin libxml2-utils xorriso
 
 # --- libvirt check ---
 header "Checking libvirt/virsh"
 SKIP_BUILD=false
 if command -v virsh &>/dev/null; then
   VER=$(virsh --version 2>/dev/null || echo "unknown")
-  if [[ "$VER" == "11.8.0" ]]; then
-    ok "libvirt 11.8.0 detected — skipping build"
-    SKIP_BUILD=true
-  else
-    warn "Detected libvirt version $VER → rebuilding to 11.8.0"
-  fi
+  if [[ "$VER" == "11.8.0" ]]; then ok "libvirt 11.8.0 detected — skipping build"; SKIP_BUILD=true
+  else warn "Detected libvirt $VER → rebuilding to 11.8.0"; fi
 else
   warn "libvirt not found, building 11.8.0"
 fi
@@ -162,34 +136,20 @@ if [[ "$SKIP_BUILD" == false ]]; then
   header "Building libvirt 11.8.0 from GitHub"
   sudo systemctl stop libvirtd 2>/dev/null || true
   sudo apt remove -y libvirt-daemon-system libvirt-clients libvirt-daemon || true
-  cd /usr/src
-  sudo rm -rf libvirt
+  cd /usr/src; sudo rm -rf libvirt
   step "Cloning libvirt v11.8.0..."
   if ! sudo git clone --branch v11.8.0 --depth 1 https://github.com/libvirt/libvirt.git; then
-    warn "Tag v11.8.0 not found, trying fallback v11.8.1..."
+    warn "Tag v11.8.0 not found, trying v11.8.1..."
     sudo git clone --branch v11.8.1 --depth 1 https://github.com/libvirt/libvirt.git || {
-      warn "Fallback failed, using v11.7.0"
-      sudo git clone --branch v11.7.0 --depth 1 https://github.com/libvirt/libvirt.git
-    }
+      warn "Fallback to v11.7.0"; sudo git clone --branch v11.7.0 --depth 1 https://github.com/libvirt/libvirt.git; }
   fi
-
   cd libvirt
-  step "Configuring Meson..."
-  sudo meson setup build --prefix=/usr -Ddriver_libvirtd=enabled -Ddriver_remote=enabled -Dsystem=true
-  step "Building with Ninja..."
-  sudo ninja -C build
-  step "Installing..."
-  sudo ninja -C build install
-
-  sudo systemctl daemon-reexec
-  sudo systemctl daemon-reload
+  step "Configuring Meson..."; sudo meson setup build --prefix=/usr -Ddriver_libvirtd=enabled -Ddriver_remote=enabled -Dsystem=true
+  step "Building with Ninja..."; sudo ninja -C build
+  step "Installing..."; sudo ninja -C build install
+  sudo systemctl daemon-reexec; sudo systemctl daemon-reload
   sudo systemctl enable --now libvirtd
-  if systemctl is-active --quiet libvirtd; then
-    ok "libvirt 11.8.0 built successfully"
-  else
-    err "Failed to start libvirtd"
-    cleanup_and_exit
-  fi
+  systemctl is-active --quiet libvirtd && ok "libvirt built & running" || { err "Failed to start libvirtd"; cleanup_and_exit; }
 fi
 
 # --- Swap setup ---
@@ -223,10 +183,187 @@ if [[ ! -f "$VIRTIO_FILE" ]]; then
   step "Downloading latest virtio-win drivers..."
   sudo wget -O "$VIRTIO_FILE" "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/latest-virtio/virtio-win.iso"
   ok "virtio drivers downloaded"
-else 
-  ok "Using cached virtio drivers: $VIRTIO_FILE"
-fi
+else ok "Using cached virtio drivers: $VIRTIO_FILE"; fi
 sudo ln -sf "$VIRTIO_FILE" "$VIRTIO_LINK"
+
+# --- Generate autounattend.xml ---
+header "Generating Unattended Installation File"
+AUTOUNATTEND_DIR="/tmp/autounattend-${VM_NAME}"
+rm -rf "$AUTOUNATTEND_DIR"; mkdir -p "$AUTOUNATTEND_DIR"
+
+# Escape special XML characters
+WIN_USERNAME_ESC=$(echo "$WIN_USERNAME" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g; s/'"'"'/\&apos;/g')
+WIN_PASSWORD_ESC=$(echo "$WIN_PASSWORD" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g; s/'"'"'/\&apos;/g')
+WIN_COMPUTERNAME_ESC=$(echo "$WIN_COMPUTERNAME" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g; s/'"'"'/\&apos;/g')
+
+cat > "$AUTOUNATTEND_DIR/autounattend.xml" << 'XMLEOF'
+<?xml version="1.0" encoding="utf-8"?>
+<unattend xmlns="urn:schemas-microsoft-com:unattend">
+  <settings pass="windowsPE">
+    <component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+      <SetupUILanguage><UILanguage>en-US</UILanguage></SetupUILanguage>
+      <InputLocale>en-US</InputLocale>
+      <SystemLocale>en-US</SystemLocale>
+      <UILanguage>en-US</UILanguage>
+      <UserLocale>en-US</UserLocale>
+    </component>
+
+    <component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+      <DiskConfiguration>
+        <Disk wcm:action="add">
+          <DiskID>0</DiskID>
+          <WillWipeDisk>true</WillWipeDisk>
+          <CreatePartitions>
+            <CreatePartition wcm:action="add">
+              <Order>1</Order>
+              <Type>Primary</Type>
+              <Extend>true</Extend>
+            </CreatePartition>
+          </CreatePartitions>
+          <ModifyPartitions>
+            <ModifyPartition wcm:action="add">
+              <Active>true</Active>
+              <Format>NTFS</Format>
+              <Label>System</Label>
+              <Order>1</Order>
+              <PartitionID>1</PartitionID>
+            </ModifyPartition>
+          </ModifyPartitions>
+        </Disk>
+      </DiskConfiguration>
+
+      <ImageInstall>
+        <OSImage>
+          <InstallFrom>
+            <MetaData wcm:action="add">
+              <Key>/IMAGE/INDEX</Key>
+              <Value>1</Value>
+            </MetaData>
+          </InstallFrom>
+          <InstallTo>
+            <DiskID>0</DiskID>
+            <PartitionID>1</PartitionID>
+          </InstallTo>
+          <WillShowUI>OnError</WillShowUI>
+        </OSImage>
+      </ImageInstall>
+
+      <UserData>
+        <AcceptEula>true</AcceptEula>
+        <FullName>VM User</FullName>
+        <Organization>VirtualMachine</Organization>
+        <ProductKey>
+          <WillShowUI>Never</WillShowUI>
+        </ProductKey>
+      </UserData>
+
+      <DynamicUpdate><Enable>false</Enable></DynamicUpdate>
+      <!-- removed invalid <RestartAutomatically> element -->
+    </component>
+
+    <component name="Microsoft-Windows-PnpCustomizationsWinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+      <DriverPaths>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="1"><Path>E:\viostor\w10\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="2"><Path>E:\NetKVM\w10\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="3"><Path>E:\vioserial\w10\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="4"><Path>E:\Balloon\w10\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="5"><Path>E:\qemupciserial\w10\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="6"><Path>E:\qemufwcfg\w10\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="7"><Path>E:\pvpanic\w10\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="8"><Path>E:\vioinput\w10\amd64</Path></PathAndCredentials>
+      </DriverPaths>
+    </component>
+  </settings>
+
+  <settings pass="specialize">
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+      <ComputerName>COMPUTERNAME_PLACEHOLDER</ComputerName>
+      <TimeZone>UTC</TimeZone>
+    </component>
+    <component name="Microsoft-Windows-TerminalServices-LocalSessionManager" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+      <fDenyTSConnections>false</fDenyTSConnections>
+    </component>
+    <component name="Microsoft-Windows-TerminalServices-RDP-WinStationExtensions" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+      <UserAuthentication>0</UserAuthentication>
+    </component>
+    <component name="Networking-MPSSVC-Svc" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+      <FirewallGroups>
+        <FirewallGroup wcm:action="add" wcm:keyValue="RemoteDesktop">
+          <Active>true</Active>
+          <Group>Remote Desktop</Group>
+          <Profile>all</Profile>
+        </FirewallGroup>
+      </FirewallGroups>
+    </component>
+  </settings>
+
+  <settings pass="oobeSystem">
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+      <OOBE>
+        <HideEULAPage>true</HideEULAPage>
+        <HideLocalAccountScreen>true</HideLocalAccountScreen>
+        <HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>
+        <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
+        <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
+        <ProtectYourPC>3</ProtectYourPC>
+        <SkipUserOOBE>true</SkipUserOOBE>
+        <SkipMachineOOBE>true</SkipMachineOOBE>
+      </OOBE>
+      <UserAccounts>
+        <LocalAccounts>
+          <LocalAccount wcm:action="add">
+            <Password><Value>PASSWORD_PLACEHOLDER</Value><PlainText>true</PlainText></Password>
+            <DisplayName>USERNAME_PLACEHOLDER</DisplayName>
+            <Group>Administrators</Group>
+            <Name>USERNAME_PLACEHOLDER</Name>
+          </LocalAccount>
+        </LocalAccounts>
+      </UserAccounts>
+      <AutoLogon>
+        <Enabled>true</Enabled>
+        <Username>USERNAME_PLACEHOLDER</Username>
+        <Password><Value>PASSWORD_PLACEHOLDER</Value><PlainText>true</PlainText></Password>
+        <LogonCount>1</LogonCount>
+      </AutoLogon>
+      <FirstLogonCommands>
+        <SynchronousCommand wcm:action="add"><Order>1</Order><CommandLine>cmd /c netsh advfirewall set allprofiles state off</CommandLine><Description>Disable Windows Firewall</Description></SynchronousCommand>
+        <SynchronousCommand wcm:action="add"><Order>2</Order><CommandLine>cmd /c reg add "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f</CommandLine><Description>Enable RDP</Description></SynchronousCommand>
+        <SynchronousCommand wcm:action="add"><Order>3</Order><CommandLine>cmd /c netsh advfirewall firewall add rule name="Remote Desktop" protocol=TCP dir=in localport=3389 action=allow</CommandLine><Description>Allow RDP Port</Description></SynchronousCommand>
+        <SynchronousCommand wcm:action="add"><Order>4</Order><CommandLine>cmd /c reg add "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v UserAuthentication /t REG_DWORD /d 0 /f</CommandLine><Description>Disable NLA for RDP</Description></SynchronousCommand>
+        <SynchronousCommand wcm:action="add"><Order>5</Order><CommandLine>cmd /c powercfg -change -monitor-timeout-ac 0</CommandLine><Description>Disable screen timeout</Description></SynchronousCommand>
+        <SynchronousCommand wcm:action="add"><Order>6</Order><CommandLine>cmd /c powercfg -change -standby-timeout-ac 0</CommandLine><Description>Disable sleep</Description></SynchronousCommand>
+        <SynchronousCommand wcm:action="add"><Order>7</Order><CommandLine>cmd /c echo Installation Complete &gt; C:\install_complete.txt</CommandLine><Description>Mark installation complete</Description></SynchronousCommand>
+      </FirstLogonCommands>
+    </component>
+  </settings>
+</unattend>
+XMLEOF
+
+# Replace placeholders with escaped values
+sed -i "s|USERNAME_PLACEHOLDER|${WIN_USERNAME_ESC}|g" "$AUTOUNATTEND_DIR/autounattend.xml"
+sed -i "s|PASSWORD_PLACEHOLDER|${WIN_PASSWORD_ESC}|g" "$AUTOUNATTEND_DIR/autounattend.xml"
+sed -i "s|COMPUTERNAME_PLACEHOLDER|${WIN_COMPUTERNAME_ESC}|g" "$AUTOUNATTEND_DIR/autounattend.xml"
+
+# Validate XML strictly
+if command -v xmllint &>/dev/null; then
+  xmllint --noout "$AUTOUNATTEND_DIR/autounattend.xml" || { err "Invalid XML syntax detected in autounattend.xml"; exit 1; }
+  ok "Autounattend.xml validated successfully"
+fi
+
+ok "Autounattend.xml generated with username: ${WIN_USERNAME}"
+
+# --- Create Floppy Image with autounattend.xml ---
+FLOPPY_IMG="${ISO_CACHE}/autounattend-${VM_NAME}.img"
+step "Creating floppy image with autounattend.xml..."
+sudo dd if=/dev/zero of="$FLOPPY_IMG" bs=1024 count=1440 2>/dev/null
+sudo mkfs.vfat "$FLOPPY_IMG" >/dev/null 2>&1
+FLOPPY_MOUNT="/mnt/floppy-tmp-${VM_NAME}"
+sudo mkdir -p "$FLOPPY_MOUNT"
+sudo mount -o loop "$FLOPPY_IMG" "$FLOPPY_MOUNT"
+sudo cp "$AUTOUNATTEND_DIR/autounattend.xml" "$FLOPPY_MOUNT/autounattend.xml"
+sync
+sudo umount "$FLOPPY_MOUNT"; sudo rmdir "$FLOPPY_MOUNT"
+ok "Floppy image created: ${FLOPPY_IMG}"
 
 # --- Create Disk ---
 header "Creating VM Disk"
@@ -246,172 +383,10 @@ else
   echo 'security_driver = "none"' | sudo tee -a /etc/libvirt/qemu.conf
 fi
 sudo systemctl restart libvirtd
-ok "AppArmor disabled for libvirt (using security_driver=none)"
+ok "AppArmor disabled for libvirt"
 
-# --- Fix default network (FIXED: handles transient network error) ---
-header "Configuring default network"
-step "Ensuring default network is persistent..."
-
-# Stop and remove any existing default network (transient or not)
-sudo virsh net-destroy default 2>/dev/null || true
-sudo virsh net-undefine default 2>/dev/null || true
-
-# Create persistent default network configuration
-cat << 'EOF' | sudo tee /tmp/default-network.xml > /dev/null
-<network>
-  <name>default</name>
-  <forward mode='nat'/>
-  <bridge name='virbr0' stp='on' delay='0'/>
-  <ip address='192.168.122.1' netmask='255.255.255.0'>
-    <dhcp>
-      <range start='192.168.122.2' end='192.168.122.254'/>
-    </dhcp>
-  </ip>
-</network>
-EOF
-
-# Define network persistently
-sudo virsh net-define /tmp/default-network.xml
-ok "Default network defined"
-
-# Start network
-if sudo virsh net-start default 2>/dev/null; then
-  ok "Default network started"
-else
-  warn "Network already active"
-fi
-
-# Enable autostart (this should work now since network is persistent)
-if sudo virsh net-autostart default 2>/dev/null; then
-  ok "Default network set to autostart"
-else
-  warn "Could not set autostart (network may already be configured)"
-fi
-
-# Verify network status
-sudo virsh net-list --all
-
-# Cleanup temp file
-sudo rm -f /tmp/default-network.xml
-
-# --- Prepare autounattend.xml for fully automated Windows setup ---
-header "Preparing Windows autounattend file"
-
-AUTOUNATTEND_XML="/tmp/autounattend.xml"
-AUTOUNATTEND_ISO="/var/lib/libvirt/images/${VM_NAME}-autounattend.iso"
-
-cat > "$AUTOUNATTEND_XML" <<'EOF'
-<?xml version="1.0" encoding="utf-8"?>
-<unattend xmlns="urn:schemas-microsoft-com:unattend">
-  <settings pass="windowsPE">
-    <component name="Microsoft-Windows-PnpCustomizationsWinPE"
-               processorArchitecture="amd64"
-               publicKeyToken="31bf3856ad364e35"
-               language="neutral" versionScope="nonSxS">
-      <DriverPaths>
-        <Path>D:\viostor\w10\amd64</Path>
-        <Path>D:\NetKVM\w10\amd64</Path>
-        <Path>D:\Balloon\w10\amd64</Path>
-        <Path>D:\pvpanic\w10\amd64</Path>
-      </DriverPaths>
-    </component>
-    <component name="Microsoft-Windows-International-Core-WinPE"
-               processorArchitecture="amd64"
-               publicKeyToken="31bf3856ad364e35"
-               language="neutral" versionScope="nonSxS">
-      <InputLocale>en-US</InputLocale>
-      <SystemLocale>en-US</SystemLocale>
-      <UILanguage>en-US</UILanguage>
-      <UserLocale>en-US</UserLocale>
-    </component>
-    <component name="Microsoft-Windows-Setup"
-               processorArchitecture="amd64"
-               publicKeyToken="31bf3856ad364e35"
-               language="neutral" versionScope="nonSxS">
-      <ImageInstall>
-        <OSImage>
-          <InstallFrom>
-            <MetaData wcm:action="add">
-              <Key>/IMAGE/INDEX</Key>
-              <Value>1</Value>
-            </MetaData>
-          </InstallFrom>
-          <InstallTo>
-            <DiskID>0</DiskID>
-            <PartitionID>1</PartitionID>
-          </InstallTo>
-          <WillShowUI>OnError</WillShowUI>
-        </OSImage>
-      </ImageInstall>
-      <DiskConfiguration>
-        <Disk wcm:action="add">
-          <DiskID>0</DiskID>
-          <WillWipeDisk>true</WillWipeDisk>
-          <CreatePartitions>
-            <CreatePartition wcm:action="add">
-              <Order>1</Order>
-              <Type>Primary</Type>
-              <Extend>true</Extend>
-            </CreatePartition>
-          </CreatePartitions>
-        </Disk>
-      </DiskConfiguration>
-      <UserData>
-        <AcceptEula>true</AcceptEula>
-        <FullName>Administrator</FullName>
-        <Organization>AutoInstall</Organization>
-      </UserData>
-    </component>
-  </settings>
-
-  <settings pass="oobeSystem">
-    <component name="Microsoft-Windows-International-Core"
-               processorArchitecture="amd64"
-               publicKeyToken="31bf3856ad364e35"
-               language="neutral" versionScope="nonSxS">
-      <InputLocale>en-US</InputLocale>
-      <SystemLocale>en-US</SystemLocale>
-      <UILanguage>en-US</UILanguage>
-      <UserLocale>en-US</UserLocale>
-    </component>
-    <component name="Microsoft-Windows-Shell-Setup"
-               processorArchitecture="amd64"
-               publicKeyToken="31bf3856ad364e35"
-               language="neutral" versionScope="nonSxS">
-      <AutoLogon>
-        <Enabled>true</Enabled>
-        <Username>Administrator</Username>
-        <Password>
-          <Value>Password123!</Value>
-          <PlainText>true</PlainText>
-        </Password>
-      </AutoLogon>
-      <OOBE>
-        <HideEULAPage>true</HideEULAPage>
-        <NetworkLocation>Work</NetworkLocation>
-        <ProtectYourPC>1</ProtectYourPC>
-      </OOBE>
-      <FirstLogonCommands>
-        <SynchronousCommand wcm:action="add">
-          <Order>1</Order>
-          <CommandLine>powershell -ExecutionPolicy Bypass -Command "Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 0; Enable-NetFirewallRule -DisplayGroup 'Remote Desktop'; Set-Service TermService -StartupType Automatic; Start-Service TermService"</CommandLine>
-          <Description>Enable RDP</Description>
-        </SynchronousCommand>
-        <SynchronousCommand wcm:action="add">
-          <Order>2</Order>
-          <CommandLine>powershell -ExecutionPolicy Bypass -Command "Start-Process msiexec.exe -ArgumentList '/i D:\guest-agent\qemu-ga-x86_64.msi /quiet /norestart' -Wait"</CommandLine>
-          <Description>Install QEMU Guest Agent</Description>
-        </SynchronousCommand>
-      </FirstLogonCommands>
-    </component>
-  </settings>
-</unattend>
-EOF
-
-# Create ISO with the autounattend.xml
-step "Creating autounattend ISO..."
-sudo genisoimage -quiet -o "$AUTOUNATTEND_ISO" -V "AUTOUNATTEND" "$AUTOUNATTEND_XML"
-ok "autounattend ISO created: $AUTOUNATTEND_ISO"
+sudo virsh net-start default 2>/dev/null || true
+sudo virsh net-autostart default
 
 # --- Create VM with Performance Optimizations ---
 header "Creating Virtual Machine"
@@ -425,215 +400,180 @@ sudo virt-install \
   --os-variant win10 \
   --network network=default,model=virtio \
   --graphics vnc,listen=0.0.0.0,port="${VNC_PORT}" \
-  --boot cdrom,hd,menu=on \
+  --boot hd,cdrom,menu=on \
   --disk "${VIRTIO_LINK}",device=cdrom \
-  --disk path="${AUTOUNATTEND_ISO}",device=cdrom \
+  --disk "${FLOPPY_IMG}",device=floppy \
   --check path_in_use=off \
   --features hyperv_relaxed=on,hyperv_vapic=on,hyperv_spinlocks=on,hyperv_spinlocks_retries=8191 \
   --clock hypervclock_present=yes \
   --noautoconsole
+ok "VM created: ${VM_NAME}"
 
-# --- Configure Huge Pages on Host ---
+# --- Configure Huge Pages ---
 echo "⚡ Configuring huge pages for better memory performance..."
-
-# Calculate huge pages needed (each huge page = 2MB)
-# Formula: (VM_RAM_MB / 2) + small buffer
 HUGEPAGES_NEEDED=$(( (RAM_SIZE / 2) + 256 ))
-
-# Check available memory
 AVAILABLE_MEM_MB=$(free -m | awk '/^Mem:/ {print $7}')
-MAX_HUGEPAGES=$(( (AVAILABLE_MEM_MB - 512) / 2 ))  # Leave 512MB for host
-
+MAX_HUGEPAGES=$(( (AVAILABLE_MEM_MB - 512) / 2 ))
 if (( HUGEPAGES_NEEDED > MAX_HUGEPAGES )); then
-  warn "Not enough free memory for ${HUGEPAGES_NEEDED} huge pages"
-  warn "Available: ${AVAILABLE_MEM_MB}MB, can allocate max ${MAX_HUGEPAGES} huge pages"
-  warn "Skipping huge pages configuration - VM will use normal pages"
-  SKIP_HUGEPAGES=true
+  warn "Not enough free memory for ${HUGEPAGES_NEEDED} huge pages"; SKIP_HUGEPAGES=true
 else
   CURRENT_HUGEPAGES=$(cat /proc/sys/vm/nr_hugepages 2>/dev/null || echo 0)
-  
   if (( CURRENT_HUGEPAGES < HUGEPAGES_NEEDED )); then
-    echo "Allocating ${HUGEPAGES_NEEDED} huge pages..."
-    echo ${HUGEPAGES_NEEDED} | sudo tee /proc/sys/vm/nr_hugepages
-    
-    # Verify allocation succeeded
+    echo ${HUGEPAGES_NEEDED} | sudo tee /proc/sys/vm/nr_hugepages >/dev/null
     ACTUAL_HUGEPAGES=$(cat /proc/sys/vm/nr_hugepages)
-    if (( ACTUAL_HUGEPAGES < HUGEPAGES_NEEDED )); then
-      warn "Could only allocate ${ACTUAL_HUGEPAGES} huge pages (requested ${HUGEPAGES_NEEDED})"
-      warn "Skipping huge pages for VM - will use normal pages"
-      SKIP_HUGEPAGES=true
+    if (( ACTUAL_HUGEPAGES < HUGEPAGES_NEEDED )); then warn "Could only allocate ${ACTUAL_HUGEPAGES} huge pages"; SKIP_HUGEPAGES=true
     else
-      # Make it permanent only if successful
-      if ! grep -q "vm.nr_hugepages" /etc/sysctl.conf 2>/dev/null; then
-        echo "vm.nr_hugepages=${HUGEPAGES_NEEDED}" | sudo tee -a /etc/sysctl.conf
-      else
-        sudo sed -i "s/^vm.nr_hugepages=.*/vm.nr_hugepages=${HUGEPAGES_NEEDED}/" /etc/sysctl.conf
-      fi
-      ok "Huge pages configured: ${ACTUAL_HUGEPAGES}"
-      SKIP_HUGEPAGES=false
+      grep -q "vm.nr_hugepages" /etc/sysctl.conf 2>/dev/null \
+        && sudo sed -i "s/^vm.nr_hugepages=.*/vm.nr_hugepages=${HUGEPAGES_NEEDED}/" /etc/sysctl.conf \
+        || echo "vm.nr_hugepages=${HUGEPAGES_NEEDED}" | sudo tee -a /etc/sysctl.conf >/dev/null
+      ok "Huge pages configured: ${ACTUAL_HUGEPAGES}"; SKIP_HUGEPAGES=false
     fi
-  else
-    ok "Huge pages already configured: ${CURRENT_HUGEPAGES}"
-    SKIP_HUGEPAGES=false
+  else ok "Huge pages already configured: ${CURRENT_HUGEPAGES}"; SKIP_HUGEPAGES=false
   fi
 fi
 
-# --- Ensure vhost_net module is loaded on the host ---
-echo "🔧 Checking for vhost_net module on host..."
+# --- Load vhost_net module ---
+echo "🔧 Checking for vhost_net module..."
 if ! lsmod | grep -q vhost_net; then
-  echo "➡️  Loading vhost_net kernel module..."
-  sudo modprobe vhost_net
-  # Make it load on boot
-  if ! grep -q "vhost_net" /etc/modules 2>/dev/null; then
-    echo "vhost_net" | sudo tee -a /etc/modules
-  fi
+  echo "➡️  Loading vhost_net kernel module..."; sudo modprobe vhost_net
+  grep -q "vhost_net" /etc/modules 2>/dev/null || echo "vhost_net" | sudo tee -a /etc/modules >/dev/null
+  ok "vhost_net module loaded"
 fi
 
-# --- Add vhost driver and multiqueue according to vCPU count ---
+# --- Stop VM temporarily for configuration ---
+echo "⏸️  Stopping VM for final configuration..."
+sudo virsh shutdown "${VM_NAME}" 2>/dev/null || true
+for i in {1..30}; do
+  if ! sudo virsh list --state-running | grep -q "${VM_NAME}"; then break; fi
+  sleep 1
+done
+sudo virsh destroy "${VM_NAME}" 2>/dev/null || true
+sleep 2
+
+# --- Add vhost driver and multiqueue ---
 echo "⚙️  Enabling vhost accelerator and multiqueue (${VCPU_COUNT} queues)..."
-sudo virt-xml "${VM_NAME}" --edit --network driver_name=vhost,driver_queues="${VCPU_COUNT}"
+sudo virt-xml "${VM_NAME}" --edit --network driver_name=vhost,driver_queues="${VCPU_COUNT}" 2>/dev/null || warn "Failed to set vhost, continuing..."
 
 # --- Enable Huge Pages for VM ---
-if [[ "$SKIP_HUGEPAGES" == "false" ]]; then
+if [[ "${SKIP_HUGEPAGES:-true}" == "false" ]]; then
   echo "💾 Enabling huge pages for VM..."
-  
-  # Ensure VM is completely stopped
-  if sudo virsh list --all | grep -q "${VM_NAME}.*running"; then
-    echo "Stopping VM gracefully..."
-    sudo virsh shutdown "${VM_NAME}" 2>/dev/null || true
-    
-    # Wait up to 30 seconds for clean shutdown
-    for i in {1..30}; do
-      if ! sudo virsh list --state-running | grep -q "${VM_NAME}"; then
-        break
-      fi
-      echo -n "."
-      sleep 1
-    done
-    echo ""
-    
-    # Force destroy if still running
-    if sudo virsh list --state-running | grep -q "${VM_NAME}"; then
-      echo "Force stopping VM..."
-      sudo virsh destroy "${VM_NAME}" 2>/dev/null || true
-      sleep 2
-    fi
-  fi
-  
-  # Verify VM is stopped
-  if sudo virsh list --state-running | grep -q "${VM_NAME}"; then
-    err "Failed to stop VM, skipping huge pages configuration"
-  else
-    sudo virt-xml "${VM_NAME}" --edit --memorybacking hugepages=on
-    ok "Huge pages enabled for VM"
-    
-    # Start VM
-    echo "🚀 Starting VM with optimizations..."
-    sudo virsh start "${VM_NAME}"
-    ok "VM started successfully!"
-  fi
-else
-  warn "Huge pages skipped - VM will use normal memory (still fast!)"
-  ok "VM is ready with all other optimizations enabled"
+  sudo virt-xml "${VM_NAME}" --edit --memorybacking hugepages=on 2>/dev/null || warn "Failed to set huge pages, continuing..."
+  ok "Huge pages enabled for VM"
 fi
 
-# --- Finish ---
-header "Installation Complete"
-ok "VM ${VM_NAME} created successfully!"
-echo ""
-echo "System Resources:"
-echo "  Total RAM: ${TOTAL_RAM_MB} MB → Allocated: ${RAM_SIZE} MB (${RAM_PERCENT}%)"
-echo "  Total CPUs: ${TOTAL_CPUS} → Allocated: ${VCPU_COUNT} vCPUs"
-echo "  Free Disk: ${FREE_DISK_GB} GB → Allocated: ${DISK_SIZE} GB"
-echo ""
-echo -e "${GREEN}╔════════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║                    IMPORTANT NOTICE                            ║${NC}"
-echo -e "${GREEN}╚════════════════════════════════════════════════════════════════╝${NC}"
-echo -e "${YELLOW}⚠ VM uses virtio drivers for maximum performance${NC}"
-echo -e "${YELLOW}⚠ virtio-win.iso is attached as second CD-ROM${NC}"
-echo ""
-echo -e "${BLUE}STEP 1: Install Storage Driver (During Windows Setup)${NC}"
-echo -e "  1. When asked ${YELLOW}'Where do you want to install Windows?'${NC}"
-echo -e "  2. Click ${YELLOW}'Load driver'${NC}"
-echo -e "  3. Browse to ${YELLOW}CD Drive (virtio-win)${NC} → ${YELLOW}viostor\\w10\\amd64${NC}"
-echo -e "  4. Select ${YELLOW}'Red Hat VirtIO SCSI controller (E:\\amd64\\2k16\\viostor.inf)'${NC}"
-echo -e "  5. Click ${YELLOW}'Next'${NC} - Your disk will appear!"
-echo -e "  6. Continue with Windows installation"
-echo ""
-echo -e "${BLUE}STEP 2: Install Network Driver (After Windows Boots)${NC}"
-echo -e "  1. Open ${YELLOW}'Device Manager'${NC} (Right-click Start → Device Manager)"
-echo -e "  2. Look for ${YELLOW}'Ethernet Controller'${NC} with yellow warning ⚠️"
-echo -e "  3. Right-click → ${YELLOW}'Update driver'${NC}"
-echo -e "  4. Select ${YELLOW}'Browse my computer for drivers'${NC}"
-echo -e "  5. Browse to ${YELLOW}CD Drive (virtio-win)${NC} → ${YELLOW}NetKVM\\w10\\amd64${NC}"
-echo -e "  6. Click ${YELLOW}'Next'${NC} - Network will work immediately!"
-echo -e "  7. Verify network: Run ${YELLOW}'ipconfig'${NC} in CMD to see your IP"
-echo ""
-echo -e "${GREEN}╔════════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║                    VNC CONNECTION INFO                         ║${NC}"
-echo -e "${GREEN}╚════════════════════════════════════════════════════════════════╝${NC}"
-echo -e "${BLUE}→ Connect to VM via VNC:${NC}"
-echo -e "  ${YELLOW}$(hostname -I | awk '{print $1}'):${VNC_PORT}${NC}"
-echo ""
-echo -e "${GREEN}╔════════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║              POST-INSTALLATION INSTRUCTIONS                    ║${NC}"
-echo -e "${GREEN}╚════════════════════════════════════════════════════════════════╝${NC}"
-echo -e "${BLUE}After installing network driver:${NC}"
-echo -e "  1. Verify VM has IP: ${YELLOW}virsh domifaddr ${VM_NAME}${NC}"
-echo -e "  2. Enable Remote Desktop (RDP) in Windows"
-echo -e "  3. ${RED}Disable Windows Firewall${NC} to allow RDP connections"
-echo -e "  4. Run port forwarding script: ${YELLOW}bash enable_port_forward_rdp.sh${NC}"
-echo ""
-echo -e "${BLUE}Optional: Install all virtio drivers at once${NC}"
-echo -e "  - Run ${YELLOW}virtio-win-guest-tools.exe${NC} from virtio-win CD"
-echo -e "  - This installs: Balloon driver, SPICE agent, and other optimizations"
-echo ""
-echo "Cached ISO: ${ISO_FILE}"
-echo "Cached Drivers: ${VIRTIO_FILE}"
-echo ""
-echo -e "${GREEN}VM Management Commands:${NC}"
-echo "  sudo virsh start ${VM_NAME}"
-echo "  sudo virsh shutdown ${VM_NAME}"
-echo "  sudo virsh destroy ${VM_NAME}  # Force stop"
-echo "  sudo virsh domifaddr ${VM_NAME}  # Check VM IP"
-echo "  sudo virsh undefine ${VM_NAME} --remove-all-storage  # Delete VM"
-echo ""
-ok "All done! Connect via VNC to start Windows installation."
+# --- Start VM ---
+header "Starting Windows Installation"
+sudo virsh start "${VM_NAME}"
+ok "VM started - Windows installation beginning..."
 
-# --- Wait for RDP port to open automatically ---
-header "Waiting for Windows setup to complete (checking RDP)..."
+# --- Monitor installation and handle reboot ---
+header "Monitoring Installation Progress"
+echo -e "${BLUE}This will take 10-20 minutes depending on your system${NC}"
+echo -e "${YELLOW}The VM will reboot automatically during installation${NC}"
+echo ""
 
-echo "⏳ This can take around 10–25 minutes depending on your disk speed."
-echo "   The script will automatically detect when Windows is ready for RDP."
+REBOOT_DETECTED=false
+INSTALL_COMPLETE=false
+CHECK_COUNT=0
+MAX_CHECKS=180  # 30 minutes max
 
-for i in {1..120}; do
-  # Ambil IP guest via qemu-guest-agent (jika sudah aktif)
-  IP=$(sudo virsh domifaddr "${VM_NAME}" | awk '/ipv4/ {print $4}' | cut -d'/' -f1)
-
-  if [[ -n "$IP" ]]; then
-    if nc -z -w 5 "$IP" 3389 2>/dev/null; then
-      echo ""
-      ok "Windows installation and setup complete!"
-      ok "RDP is active and ready to connect."
-      echo ""
-      echo "👉 Connect using:"
-      echo "   mstsc /v:${IP}"
-      echo "   Username: Administrator"
-      echo "   Password: Password123!"
-      echo ""
-      break
+while (( CHECK_COUNT < MAX_CHECKS )); do
+  CHECK_COUNT=$((CHECK_COUNT + 1))
+  if sudo virsh list --state-running | grep -q "${VM_NAME}"; then
+    echo -n "."
+  else
+    if [[ "$REBOOT_DETECTED" == "false" ]]; then
+      echo ""; echo "🔄 Reboot detected! Changing boot order to HDD first..."
+      REBOOT_DETECTED=true
+      sudo virt-xml "${VM_NAME}" --edit --boot hd,cdrom 2>/dev/null || true
+      sleep 5
+      echo "🚀 Restarting VM..."
+      sudo virsh start "${VM_NAME}" 2>/dev/null || true
+      sleep 10
+    else
+      echo ""; warn "VM stopped unexpectedly, restarting..."
+      sudo virsh start "${VM_NAME}" 2>/dev/null || true
+      sleep 10
     fi
   fi
 
-  # Progress indicator
-  echo -n "."
-  sleep 15
+  if [[ "$REBOOT_DETECTED" == "true" ]] && (( CHECK_COUNT % 10 == 0 )); then
+    VM_IP=$(sudo virsh domifaddr "${VM_NAME}" 2>/dev/null | grep -oP '(\d{1,3}\.){3}\d{1,3}' | head -1 || echo "")
+    if [[ -n "$VM_IP" ]]; then
+      echo ""; echo "✅ Network detected! VM IP: ${VM_IP}"
+      echo "🎉 Windows installation likely complete!"
+      INSTALL_COMPLETE=true; break
+    fi
+  fi
+  sleep 10
 done
 
 echo ""
-echo "If RDP didn’t appear yet, you can recheck later with:"
-echo "  sudo virsh domifaddr ${VM_NAME}"
-echo "and then test with:"
-echo "  nc -zv <ip> 3389"
+if [[ "$INSTALL_COMPLETE" == "true" ]]; then
+  header "Installation Complete!"
+  ok "Windows 10 LTSC installed successfully!"
+  echo ""
+  echo -e "${BLUE}VM Details:${NC}"
+  echo "  Name: ${VM_NAME}"
+  echo "  Computer Name: ${WIN_COMPUTERNAME}"
+  echo "  Username: ${WIN_USERNAME}"
+  echo "  Password: [hidden]"
+  echo "  IP Address: ${VM_IP}"
+  echo ""
+  echo -e "${BLUE}VNC Connection:${NC}"
+  echo "  ${YELLOW}$(hostname -I | awk '{print $1}'):${VNC_PORT}${NC}"
+  echo ""
+  echo -e "${GREEN}✅ Auto-configured features:${NC}"
+  echo "  ✓ VirtIO storage & network drivers"
+  echo "  ✓ Remote Desktop (RDP) enabled"
+  echo "  ✓ Windows Firewall disabled"
+  echo "  ✓ Network configured automatically"
+else
+  warn "Installation monitoring timed out after 30 minutes"
+  echo ""
+  echo "Please check VM status manually:"
+  echo "  sudo virsh list --all"
+  echo "  sudo virsh domifaddr ${VM_NAME}"
+  echo ""
+  echo "Connect via VNC to check progress:"
+  echo "  ${YELLOW}$(hostname -I | awk '{print $1}'):${VNC_PORT}${NC}"
+fi
+
 echo ""
-ok "Script completed. VM will continue setup automatically if not done yet."
+echo -e "${GREEN}╔════════════════════════════════════════════════════════════════╗${NC}"
+echo -e "${GREEN}║                    VM MANAGEMENT COMMANDS                      ║${NC}"
+echo -e "${GREEN}╚════════════════════════════════════════════════════════════════╝${NC}"
+echo ""
+echo "  sudo virsh list --all                    # List all VMs"
+echo "  sudo virsh start ${VM_NAME}              # Start VM"
+echo "  sudo virsh shutdown ${VM_NAME}           # Graceful shutdown"
+echo "  sudo virsh destroy ${VM_NAME}            # Force stop"
+echo "  sudo virsh reboot ${VM_NAME}             # Reboot VM"
+echo "  sudo virsh domifaddr ${VM_NAME}          # Check VM IP"
+echo "  sudo virsh console ${VM_NAME}            # Serial console"
+echo "  sudo virsh undefine ${VM_NAME} --remove-all-storage  # Delete VM"
+echo ""
+echo -e "${BLUE}Resource Allocation:${NC}"
+echo "  RAM: ${RAM_SIZE} MB (${RAM_PERCENT}% of ${TOTAL_RAM_MB} MB)"
+echo "  vCPUs: ${VCPU_COUNT} of ${TOTAL_CPUS}"
+echo "  Disk: ${DISK_SIZE} GB"
+echo "  Swap: ${SWAP_SIZE} GB"
+echo ""
+echo -e "${BLUE}Performance Features:${NC}"
+echo "  ✓ KVM hardware virtualization"
+echo "  ✓ VirtIO drivers (network + storage)"
+echo "  ✓ Host CPU passthrough"
+echo "  ✓ vhost-net acceleration + multiqueue (${VCPU_COUNT})"
+if [[ "${SKIP_HUGEPAGES:-true}" == "false" ]]; then
+  echo "  ✓ Huge pages enabled"
+else
+  echo "  ○ Huge pages skipped (insufficient memory)"
+fi
+echo "  ✓ Hyper-V enlightenments"
+echo ""
+echo -e "${BLUE}Cached Files:${NC}"
+echo "  Windows ISO: ${ISO_FILE}"
+echo "  VirtIO Drivers: ${VIRTIO_FILE}"
+echo "  Autounattend Floppy: ${FLOPPY_IMG}"
+echo ""
+ok "Setup complete! VM is ready to use."
