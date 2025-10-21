@@ -263,7 +263,7 @@ sudo virt-install \
   --network network=default,model=virtio \
   --graphics vnc,listen=0.0.0.0,port="${VNC_PORT}" \
   --boot cdrom,hd,menu=on \
-  --disk "${VIRTIO_LINK}",device=cdrom \
+  --disk path="/var/lib/libvirt/images/${VM_NAME}.img",size="${DISK_SIZE}",bus=virtio,cache=none,io=native,discard=unmap \
   --check path_in_use=off \
   --noautoconsole
 
