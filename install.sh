@@ -294,9 +294,127 @@ sudo virsh net-list --all
 # Cleanup temp file
 sudo rm -f /tmp/default-network.xml
 
+# --- Prepare autounattend.xml for fully automated Windows setup ---
+header "Preparing Windows autounattend file"
+
+AUTOUNATTEND_XML="/tmp/autounattend.xml"
+AUTOUNATTEND_ISO="/var/lib/libvirt/images/${VM_NAME}-autounattend.iso"
+
+cat > "$AUTOUNATTEND_XML" <<'EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<unattend xmlns="urn:schemas-microsoft-com:unattend">
+  <settings pass="windowsPE">
+    <component name="Microsoft-Windows-PnpCustomizationsWinPE"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral" versionScope="nonSxS">
+      <DriverPaths>
+        <Path>D:\viostor\w10\amd64</Path>
+        <Path>D:\NetKVM\w10\amd64</Path>
+        <Path>D:\Balloon\w10\amd64</Path>
+        <Path>D:\pvpanic\w10\amd64</Path>
+      </DriverPaths>
+    </component>
+    <component name="Microsoft-Windows-International-Core-WinPE"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral" versionScope="nonSxS">
+      <InputLocale>en-US</InputLocale>
+      <SystemLocale>en-US</SystemLocale>
+      <UILanguage>en-US</UILanguage>
+      <UserLocale>en-US</UserLocale>
+    </component>
+    <component name="Microsoft-Windows-Setup"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral" versionScope="nonSxS">
+      <ImageInstall>
+        <OSImage>
+          <InstallFrom>
+            <MetaData wcm:action="add">
+              <Key>/IMAGE/INDEX</Key>
+              <Value>1</Value>
+            </MetaData>
+          </InstallFrom>
+          <InstallTo>
+            <DiskID>0</DiskID>
+            <PartitionID>1</PartitionID>
+          </InstallTo>
+          <WillShowUI>OnError</WillShowUI>
+        </OSImage>
+      </ImageInstall>
+      <DiskConfiguration>
+        <Disk wcm:action="add">
+          <DiskID>0</DiskID>
+          <WillWipeDisk>true</WillWipeDisk>
+          <CreatePartitions>
+            <CreatePartition wcm:action="add">
+              <Order>1</Order>
+              <Type>Primary</Type>
+              <Extend>true</Extend>
+            </CreatePartition>
+          </CreatePartitions>
+        </Disk>
+      </DiskConfiguration>
+      <UserData>
+        <AcceptEula>true</AcceptEula>
+        <FullName>Administrator</FullName>
+        <Organization>AutoInstall</Organization>
+      </UserData>
+    </component>
+  </settings>
+
+  <settings pass="oobeSystem">
+    <component name="Microsoft-Windows-International-Core"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral" versionScope="nonSxS">
+      <InputLocale>en-US</InputLocale>
+      <SystemLocale>en-US</SystemLocale>
+      <UILanguage>en-US</UILanguage>
+      <UserLocale>en-US</UserLocale>
+    </component>
+    <component name="Microsoft-Windows-Shell-Setup"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral" versionScope="nonSxS">
+      <AutoLogon>
+        <Enabled>true</Enabled>
+        <Username>Administrator</Username>
+        <Password>
+          <Value>Password123!</Value>
+          <PlainText>true</PlainText>
+        </Password>
+      </AutoLogon>
+      <OOBE>
+        <HideEULAPage>true</HideEULAPage>
+        <NetworkLocation>Work</NetworkLocation>
+        <ProtectYourPC>1</ProtectYourPC>
+      </OOBE>
+      <FirstLogonCommands>
+        <SynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <CommandLine>powershell -ExecutionPolicy Bypass -Command "Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 0; Enable-NetFirewallRule -DisplayGroup 'Remote Desktop'; Set-Service TermService -StartupType Automatic; Start-Service TermService"</CommandLine>
+          <Description>Enable RDP</Description>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <Order>2</Order>
+          <CommandLine>powershell -ExecutionPolicy Bypass -Command "Start-Process msiexec.exe -ArgumentList '/i D:\guest-agent\qemu-ga-x86_64.msi /quiet /norestart' -Wait"</CommandLine>
+          <Description>Install QEMU Guest Agent</Description>
+        </SynchronousCommand>
+      </FirstLogonCommands>
+    </component>
+  </settings>
+</unattend>
+EOF
+
+# Create ISO with the autounattend.xml
+step "Creating autounattend ISO..."
+sudo genisoimage -quiet -o "$AUTOUNATTEND_ISO" -V "AUTOUNATTEND" "$AUTOUNATTEND_XML"
+ok "autounattend ISO created: $AUTOUNATTEND_ISO"
+
 # --- Create VM with Performance Optimizations ---
 header "Creating Virtual Machine"
-
 sudo virt-install \
   --name "${VM_NAME}" \
   --ram "${RAM_SIZE}" \
@@ -309,6 +427,7 @@ sudo virt-install \
   --graphics vnc,listen=0.0.0.0,port="${VNC_PORT}" \
   --boot cdrom,hd,menu=on \
   --disk "${VIRTIO_LINK}",device=cdrom \
+  --disk path="${AUTOUNATTEND_ISO}",device=cdrom \
   --check path_in_use=off \
   --features hyperv_relaxed=on,hyperv_vapic=on,hyperv_spinlocks=on,hyperv_spinlocks_retries=8191 \
   --clock hypervclock_present=yes \
@@ -480,3 +599,41 @@ echo "  sudo virsh domifaddr ${VM_NAME}  # Check VM IP"
 echo "  sudo virsh undefine ${VM_NAME} --remove-all-storage  # Delete VM"
 echo ""
 ok "All done! Connect via VNC to start Windows installation."
+
+# --- Wait for RDP port to open automatically ---
+header "Waiting for Windows setup to complete (checking RDP)..."
+
+echo "⏳ This can take around 10–25 minutes depending on your disk speed."
+echo "   The script will automatically detect when Windows is ready for RDP."
+
+for i in {1..120}; do
+  # Ambil IP guest via qemu-guest-agent (jika sudah aktif)
+  IP=$(sudo virsh domifaddr "${VM_NAME}" | awk '/ipv4/ {print $4}' | cut -d'/' -f1)
+
+  if [[ -n "$IP" ]]; then
+    if nc -z -w 5 "$IP" 3389 2>/dev/null; then
+      echo ""
+      ok "Windows installation and setup complete!"
+      ok "RDP is active and ready to connect."
+      echo ""
+      echo "👉 Connect using:"
+      echo "   mstsc /v:${IP}"
+      echo "   Username: Administrator"
+      echo "   Password: Password123!"
+      echo ""
+      break
+    fi
+  fi
+
+  # Progress indicator
+  echo -n "."
+  sleep 15
+done
+
+echo ""
+echo "If RDP didn’t appear yet, you can recheck later with:"
+echo "  sudo virsh domifaddr ${VM_NAME}"
+echo "and then test with:"
+echo "  nc -zv <ip> 3389"
+echo ""
+ok "Script completed. VM will continue setup automatically if not done yet."
