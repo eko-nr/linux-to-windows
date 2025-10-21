@@ -251,7 +251,7 @@ ok "AppArmor disabled for libvirt (using security_driver=none)"
 sudo virsh net-start default 2>/dev/null || true
 sudo virsh net-autostart default
 
-# --- Create VM ---
+# --- Create VM with Performance Optimizations ---
 header "Creating Virtual Machine"
 
 sudo virt-install \
@@ -271,16 +271,79 @@ sudo virt-install \
   --clock hypervclock_present=yes \
   --noautoconsole
 
+# --- Configure Huge Pages on Host ---
+echo "⚡ Configuring huge pages for better memory performance..."
+HUGEPAGES_NEEDED=$(( (RAM_SIZE / 2) + 512 ))
+CURRENT_HUGEPAGES=$(cat /proc/sys/vm/nr_hugepages 2>/dev/null || echo 0)
+
+if (( CURRENT_HUGEPAGES < HUGEPAGES_NEEDED )); then
+  echo "Allocating ${HUGEPAGES_NEEDED} huge pages..."
+  echo ${HUGEPAGES_NEEDED} | sudo tee /proc/sys/vm/nr_hugepages
+  
+  # Make it permanent
+  if ! grep -q "vm.nr_hugepages" /etc/sysctl.conf 2>/dev/null; then
+    echo "vm.nr_hugepages=${HUGEPAGES_NEEDED}" | sudo tee -a /etc/sysctl.conf
+  else
+    sudo sed -i "s/^vm.nr_hugepages=.*/vm.nr_hugepages=${HUGEPAGES_NEEDED}/" /etc/sysctl.conf
+  fi
+  ok "Huge pages configured: ${HUGEPAGES_NEEDED}"
+else
+  ok "Huge pages already configured: ${CURRENT_HUGEPAGES}"
+fi
+
 # --- Ensure vhost_net module is loaded on the host ---
 echo "🔧 Checking for vhost_net module on host..."
 if ! lsmod | grep -q vhost_net; then
   echo "➡️  Loading vhost_net kernel module..."
   sudo modprobe vhost_net
+  # Make it load on boot
+  if ! grep -q "vhost_net" /etc/modules 2>/dev/null; then
+    echo "vhost_net" | sudo tee -a /etc/modules
+  fi
 fi
 
 # --- Add vhost driver and multiqueue according to vCPU count ---
 echo "⚙️  Enabling vhost accelerator and multiqueue (${VCPU_COUNT} queues)..."
 sudo virt-xml "${VM_NAME}" --edit --network driver_name=vhost,driver_queues="${VCPU_COUNT}"
+
+# --- Enable Huge Pages for VM ---
+echo "💾 Enabling huge pages for VM..."
+
+# Ensure VM is completely stopped
+if sudo virsh list --all | grep -q "${VM_NAME}.*running"; then
+  echo "Stopping VM gracefully..."
+  sudo virsh shutdown "${VM_NAME}" 2>/dev/null || true
+  
+  # Wait up to 30 seconds for clean shutdown
+  for i in {1..30}; do
+    if ! sudo virsh list --state-running | grep -q "${VM_NAME}"; then
+      break
+    fi
+    echo -n "."
+    sleep 1
+  done
+  echo ""
+  
+  # Force destroy if still running
+  if sudo virsh list --state-running | grep -q "${VM_NAME}"; then
+    echo "Force stopping VM..."
+    sudo virsh destroy "${VM_NAME}" 2>/dev/null || true
+    sleep 2
+  fi
+fi
+
+# Verify VM is stopped
+if sudo virsh list --state-running | grep -q "${VM_NAME}"; then
+  err "Failed to stop VM, skipping huge pages configuration"
+else
+  sudo virt-xml "${VM_NAME}" --edit --memorybacking hugepages=on
+  ok "Huge pages enabled for VM"
+  
+  # Start VM
+  echo "🚀 Starting VM with optimizations..."
+  sudo virsh start "${VM_NAME}"
+  ok "VM started successfully!"
+fi
 
 # --- Finish ---
 header "Installation Complete"
