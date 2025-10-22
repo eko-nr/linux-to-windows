@@ -385,17 +385,24 @@ fi
 sudo systemctl restart libvirtd
 ok "AppArmor disabled for libvirt"
 
-# Ensure default network exists and is persistent
+# Ensure default network exists and has DHCP
 if ! sudo virsh net-info default &>/dev/null; then
-  echo "Creating default network..."
-  sudo virsh net-define /usr/share/libvirt/networks/default.xml 2>/dev/null || \
-    sudo virsh net-define /etc/libvirt/qemu/networks/default.xml 2>/dev/null || \
-    echo '<network><name>default</name><bridge name="virbr0" /></network>' | sudo virsh net-define /dev/stdin
+  echo "Creating persistent default network with DHCP..."
+  cat <<EOF | sudo virsh net-define /dev/stdin
+<network>
+  <name>default</name>
+  <bridge name="virbr0" />
+  <forward mode="nat"/>
+  <ip address="192.168.122.1" netmask="255.255.255.0">
+    <dhcp>
+      <range start="192.168.122.2" end="192.168.122.254"/>
+    </dhcp>
+  </ip>
+</network>
+EOF
 fi
-
-# Start and enable autostart safely
-sudo virsh net-start default 2>/dev/null || true
-sudo virsh net-autostart default 2>/dev/null || true
+sudo virsh net-start default || true
+sudo virsh net-autostart default || true
 
 # --- Create VM with Performance Optimizations ---
 header "Creating Virtual Machine"
