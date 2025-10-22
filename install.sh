@@ -408,8 +408,16 @@ cat <<EOF | sudo virsh net-define /dev/stdin
 EOF
 
 sudo virsh net-start default
-sudo virsh net-autostart default
+if [[ -L /etc/libvirt/qemu/networks/autostart/default.xml ]]; then
+  echo "Removing existing autostart symlink to prevent conflict..."
+  sudo rm -f /etc/libvirt/qemu/networks/autostart/default.xml
+fi
+
+sudo virsh net-autostart default || {
+  warn "Autostart symlink already exists, skipping..."
+}
 ok "Default network active with DHCP"
+
 
 # --- Create VM with Performance Optimizations ---
 header "Creating Virtual Machine"
