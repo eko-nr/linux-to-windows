@@ -118,7 +118,8 @@ sudo apt install -y \
  libcap-ng-dev libselinux1-dev libsystemd-dev libapparmor-dev \
  libjson-c-dev libxslt1-dev xsltproc gettext libreadline-dev \
  libncurses5-dev libtirpc-dev python3-docutils \
- libgnutls28-dev gnutls-bin libxml2-utils xorriso
+ libgnutls28-dev gnutls-bin libxml2-utils xorriso \
+ dosfstools
 
 # --- libvirt check ---
 header "Checking libvirt/virsh"
