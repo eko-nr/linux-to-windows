@@ -264,7 +264,10 @@ cat > "$AUTOUNATTEND_DIR/autounattend.xml" << 'XMLEOF'
 
     <component name="Microsoft-Windows-PnpCustomizationsWinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
       <DriverPaths>
+      <!-- 
+        [OLD CONFIG - commented out for reference]
         <PathAndCredentials wcm:action="add" wcm:keyValue="1"><Path>E:\viostor\w10\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:keyValue="1"><Path>E:\vioscsi\w10\amd64</Path></PathAndCredentials>
         <PathAndCredentials wcm:action="add" wcm:keyValue="2"><Path>E:\NetKVM\w10\amd64</Path></PathAndCredentials>
         <PathAndCredentials wcm:action="add" wcm:keyValue="3"><Path>E:\vioserial\w10\amd64</Path></PathAndCredentials>
         <PathAndCredentials wcm:action="add" wcm:keyValue="4"><Path>E:\Balloon\w10\amd64</Path></PathAndCredentials>
@@ -272,7 +275,18 @@ cat > "$AUTOUNATTEND_DIR/autounattend.xml" << 'XMLEOF'
         <PathAndCredentials wcm:action="add" wcm:keyValue="6"><Path>E:\qemufwcfg\w10\amd64</Path></PathAndCredentials>
         <PathAndCredentials wcm:action="add" wcm:keyValue="7"><Path>E:\pvpanic\w10\amd64</Path></PathAndCredentials>
         <PathAndCredentials wcm:action="add" wcm:keyValue="8"><Path>E:\vioinput\w10\amd64</Path></PathAndCredentials>
-      </DriverPaths>
+      -->
+
+      <!-- [NEW CONFIG - uses vioscsi for VirtIO storage detection] -->
+      <PathAndCredentials wcm:action="add" wcm:keyValue="1"><Path>E:\vioscsi\w10\amd64</Path></PathAndCredentials>
+      <PathAndCredentials wcm:action="add" wcm:keyValue="2"><Path>E:\NetKVM\w10\amd64</Path></PathAndCredentials>
+      <PathAndCredentials wcm:action="add" wcm:keyValue="3"><Path>E:\vioserial\w10\amd64</Path></PathAndCredentials>
+      <PathAndCredentials wcm:action="add" wcm:keyValue="4"><Path>E:\Balloon\w10\amd64</Path></PathAndCredentials>
+      <PathAndCredentials wcm:action="add" wcm:keyValue="5"><Path>E:\qemupciserial\w10\amd64</Path></PathAndCredentials>
+      <PathAndCredentials wcm:action="add" wcm:keyValue="6"><Path>E:\qemufwcfg\w10\amd64</Path></PathAndCredentials>
+      <PathAndCredentials wcm:action="add" wcm:keyValue="7"><Path>E:\pvpanic\w10\amd64</Path></PathAndCredentials>
+      <PathAndCredentials wcm:action="add" wcm:keyValue="8"><Path>E:\vioinput\w10\amd64</Path></PathAndCredentials>
+    </DriverPaths>
     </component>
   </settings>
 
@@ -418,7 +432,6 @@ sudo virsh net-autostart default || {
 }
 ok "Default network active with DHCP"
 
-
 # --- Create VM with Performance Optimizations ---
 header "Creating Virtual Machine"
 sudo virt-install \
@@ -439,6 +452,11 @@ sudo virt-install \
   --clock hypervclock_present=yes \
   --noautoconsole
 ok "VM created: ${VM_NAME}"
+
+# --- Force boot order to HDD first ---
+echo "🧩 Forcing boot order: hard disk first"
+sudo virt-xml "${VM_NAME}" --edit --boot hd,cdrom || true
+ok "Boot order set to HDD first"
 
 # --- Configure Huge Pages ---
 echo "⚡ Configuring huge pages for better memory performance..."
@@ -481,7 +499,7 @@ done
 sudo virsh destroy "${VM_NAME}" 2>/dev/null || true
 sleep 2
 
-# --- Add vhost driver and multiqueue ---
+# --- Enable vhost accelerator and multiqueue ---
 echo "⚙️  Enabling vhost accelerator and multiqueue (${VCPU_COUNT} queues)..."
 sudo virt-xml "${VM_NAME}" --edit --network driver_name=vhost,driver_queues="${VCPU_COUNT}" 2>/dev/null || warn "Failed to set vhost, continuing..."
 
@@ -497,9 +515,9 @@ header "Starting Windows Installation"
 sudo virsh start "${VM_NAME}"
 ok "VM started - Windows installation beginning..."
 
-# --- Monitor installation and handle reboot ---
+# --- Monitor installation and handle reboot (improved) ---
 header "Monitoring Installation Progress"
-echo -e "${BLUE}This will take 10-20 minutes depending on your system${NC}"
+echo -e "${BLUE}This will take 10–20 minutes depending on your system${NC}"
 echo -e "${YELLOW}The VM will reboot automatically during installation${NC}"
 echo ""
 
@@ -510,11 +528,14 @@ MAX_CHECKS=180  # 30 minutes max
 
 while (( CHECK_COUNT < MAX_CHECKS )); do
   CHECK_COUNT=$((CHECK_COUNT + 1))
+
+  # Domain state check (untuk mendeteksi reboot 'eksternal' saja)
   if sudo virsh list --state-running | grep -q "${VM_NAME}"; then
     echo -n "."
   else
     if [[ "$REBOOT_DETECTED" == "false" ]]; then
-      echo ""; echo "🔄 Reboot detected! Changing boot order to HDD first..."
+      echo ""
+      echo "🔄 Reboot detected! Ensuring HDD boot first..."
       REBOOT_DETECTED=true
       sudo virt-xml "${VM_NAME}" --edit --boot hd,cdrom 2>/dev/null || true
       sleep 5
@@ -522,20 +543,36 @@ while (( CHECK_COUNT < MAX_CHECKS )); do
       sudo virsh start "${VM_NAME}" 2>/dev/null || true
       sleep 10
     else
-      echo ""; warn "VM stopped unexpectedly, restarting..."
+      echo ""
+      warn "VM stopped unexpectedly, restarting..."
       sudo virsh start "${VM_NAME}" 2>/dev/null || true
       sleep 10
     fi
   fi
 
-  if [[ "$REBOOT_DETECTED" == "true" ]] && (( CHECK_COUNT % 10 == 0 )); then
+  # Cek IP setiap 10 iterasi (tanpa syarat REBOOT_DETECTED)
+  if (( CHECK_COUNT % 10 == 0 )); then
     VM_IP=$(sudo virsh domifaddr "${VM_NAME}" 2>/dev/null | grep -oP '(\d{1,3}\.){3}\d{1,3}' | head -1 || echo "")
     if [[ -n "$VM_IP" ]]; then
-      echo ""; echo "✅ Network detected! VM IP: ${VM_IP}"
+      echo ""
+      echo "✅ Network detected! VM IP: ${VM_IP}"
       echo "🎉 Windows installation likely complete!"
-      INSTALL_COMPLETE=true; break
+      INSTALL_COMPLETE=true
+      break
     fi
   fi
+
+  # Opsional: cek sentinel file kalau guestfish tersedia (validasi instalasi)
+  if (( CHECK_COUNT % 20 == 0 )) && command -v guestfish >/dev/null 2>&1; then
+    IMG="/var/lib/libvirt/images/${VM_NAME}.img"
+    if sudo guestfish --ro -a "$IMG" -i sh "test -f /install_complete.txt || test -f /Windows/System32/winload.exe" >/dev/null 2>&1; then
+      echo ""
+      echo "✅ Installation artifacts found on disk (guestfish)."
+      INSTALL_COMPLETE=true
+      break
+    fi
+  fi
+
   sleep 10
 done
 
@@ -543,66 +580,47 @@ done
 header "Auto Configuring RDP Port Forwarding"
 echo "⏳ Waiting for VM IP to appear..."
 
-VM_IP=""
+VM_IP="${VM_IP:-}"
 for i in {1..60}; do
-    VM_IP=$(sudo virsh domifaddr "${VM_NAME}" 2>/dev/null | awk '/ipv4/ {print $4}' | cut -d'/' -f1 | head -n1 || true)
-    if [[ -n "$VM_IP" ]]; then
-        echo "✅ Detected VM IP: $VM_IP"
-        break
-    fi
-    sleep 5
+  [[ -n "$VM_IP" ]] && break
+  VM_IP=$(sudo virsh domifaddr "${VM_NAME}" 2>/dev/null | awk '/ipv4/ {print $4}' | cut -d'/' -f1 | head -n1 || true)
+  [[ -n "$VM_IP" ]] && echo "✅ Detected VM IP: $VM_IP"
+  sleep 5
 done
 
 if [[ -z "$VM_IP" ]]; then
-    warn "VM IP not detected after 5 minutes. Skipping port forwarding."
-    exit 0
-fi
+  warn "VM IP not detected after 5 minutes. Skipping port forwarding."
+else
+  echo ""
+  echo "=== [ Enable Port Forwarding for RDP - Debian ] ==="
+  PUB_IF=$(ip -4 route get 1.1.1.1 | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -n1)
+  if [ -z "$PUB_IF" ]; then
+      err "Could not detect public network interface!"
+      echo "Please check using: ip a"
+  else
+      PUB_IP=$(ip -4 addr show dev "$PUB_IF" | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n1)
+      echo "Detected public interface: $PUB_IF ($PUB_IP)"
+      RDP_PORT=3389
+      echo ""
+      echo "Forwarding RDP (TCP+UDP) from $PUB_IP:$RDP_PORT → $VM_NAME ($VM_IP:$RDP_PORT)"
+      echo ""
 
-echo ""
-echo "=== [ Enable Port Forwarding for RDP - Debian ] ==="
-PUB_IF=$(ip -4 route get 1.1.1.1 | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -n1)
-if [ -z "$PUB_IF" ]; then
-    err "Could not detect public network interface!"
-    echo "Please check using: ip a"
-    exit 1
-fi
+      sysctl -w net.ipv4.ip_forward=1 >/dev/null
+      grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf || echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
 
-PUB_IP=$(ip -4 addr show dev "$PUB_IF" | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n1)
-echo "Detected public interface: $PUB_IF ($PUB_IP)"
+      if ! command -v nft >/dev/null 2>&1; then
+          echo "Installing nftables..."
+          apt-get update -qq && apt-get install -y nftables >/dev/null
+      fi
 
-RDP_PORT=3389
-echo ""
-echo "Forwarding RDP (TCP+UDP) from $PUB_IP:$RDP_PORT → $VM_NAME ($VM_IP:$RDP_PORT)"
-echo ""
-
-# Enable IP forwarding
-sysctl -w net.ipv4.ip_forward=1 >/dev/null
-grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf || echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
-
-# Ensure nftables installed
-if ! command -v nft >/dev/null 2>&1; then
-    echo "Installing nftables..."
-    apt-get update -qq && apt-get install -y nftables >/dev/null
-fi
-
-# Write nftables config
-cat > /etc/nftables.conf <<EOF
+      cat > /etc/nftables.conf <<EOF
 #!/usr/sbin/nft -f
 flush ruleset
 
 table inet filter {
-    chain input {
-        type filter hook input priority 0;
-        policy accept;
-    }
-    chain forward {
-        type filter hook forward priority 0;
-        policy accept;
-    }
-    chain output {
-        type filter hook output priority 0;
-        policy accept;
-    }
+    chain input { type filter hook input priority 0; policy accept; }
+    chain forward { type filter hook forward priority 0; policy accept; }
+    chain output { type filter hook output priority 0; policy accept; }
 }
 
 table ip nat {
@@ -618,13 +636,13 @@ table ip nat {
 }
 EOF
 
-# Apply nftables
-systemctl enable nftables >/dev/null 2>&1 || true
-systemctl restart nftables
-
-ok "RDP Port forwarding active!"
-echo "🌐 Public RDP: ${PUB_IP}:${RDP_PORT} → VM: ${VM_IP}:${RDP_PORT}"
-echo "⚠️ Ensure RDP service is running inside Windows and firewall is off."
+      systemctl enable nftables >/dev/null 2>&1 || true
+      systemctl restart nftables
+      ok "RDP Port forwarding active!"
+      echo "🌐 Public RDP: ${PUB_IP}:${RDP_PORT} → VM: ${VM_IP}:${RDP_PORT}"
+      echo "⚠️ Ensure RDP service is running inside Windows and firewall is off."
+  fi
+fi
 
 echo ""
 if [[ "$INSTALL_COMPLETE" == "true" ]]; then
@@ -636,7 +654,7 @@ if [[ "$INSTALL_COMPLETE" == "true" ]]; then
   echo "  Computer Name: ${WIN_COMPUTERNAME}"
   echo "  Username: ${WIN_USERNAME}"
   echo "  Password: [hidden]"
-  echo "  IP Address: ${VM_IP}"
+  echo "  IP Address: ${VM_IP:-unknown}"
   echo ""
   echo -e "${BLUE}VNC Connection:${NC}"
   echo "  ${YELLOW}$(hostname -I | awk '{print $1}'):${VNC_PORT}${NC}"
@@ -647,7 +665,7 @@ if [[ "$INSTALL_COMPLETE" == "true" ]]; then
   echo "  ✓ Windows Firewall disabled"
   echo "  ✓ Network configured automatically"
 else
-  warn "Installation monitoring timed out after 30 minutes"
+  warn "Installation monitoring timed out after $(( MAX_CHECKS * 10 / 60 )) minutes"
   echo ""
   echo "Please check VM status manually:"
   echo "  sudo virsh list --all"
