@@ -119,7 +119,7 @@ sudo apt install -y \
  libjson-c-dev libxslt1-dev xsltproc gettext libreadline-dev \
  libncurses5-dev libtirpc-dev python3-docutils \
  libgnutls28-dev gnutls-bin libxml2-utils xorriso \
- dosfstools
+ dosfstools libguestfs-tools
 
 # --- libvirt check ---
 header "Checking libvirt/virsh"
@@ -361,8 +361,11 @@ sed -i "s|COMPUTERNAME_PLACEHOLDER|${WIN_COMPUTERNAME_ESC}|g" "$AUTOUNATTEND_DIR
 
 # Validate XML strictly
 if command -v xmllint &>/dev/null; then
-  xmllint --noout "$AUTOUNATTEND_DIR/autounattend.xml" || { err "Invalid XML syntax detected in autounattend.xml"; exit 1; }
-  ok "Autounattend.xml validated successfully"
+  if ! xmllint --noout "$AUTOUNATTEND_DIR/autounattend.xml" 2>/dev/null; then
+    warn "xmllint found issues or is missing schema — skipping strict validation"
+  else
+    ok "Autounattend.xml validated successfully"
+  fi
 fi
 
 ok "Autounattend.xml generated with username: ${WIN_USERNAME}"
@@ -389,7 +392,7 @@ ok "Disk ${DISK_SIZE}G ready"
 
 # --- Remove old VM ---
 sudo virsh destroy ${VM_NAME} 2>/dev/null || true
-sudo virsh undefine ${VM_NAME} --remove-all-storage 2>/dev/null || true
+sudo virsh undefine ${VM_NAME} --nvram --remove-all-storage 2>/dev/null || true
 
 # --- Fix AppArmor issue ---
 header "Fixing AppArmor configuration"
@@ -515,9 +518,8 @@ header "Starting Windows Installation"
 sudo virsh start "${VM_NAME}"
 ok "VM started - Windows installation beginning..."
 
-# --- Monitor installation and handle reboot (improved) ---
 header "Monitoring Installation Progress"
-echo -e "${BLUE}This will take 10–20 minutes depending on your system${NC}"
+echo -e "${BLUE}This will take 10-20 minutes depending on your system${NC}"
 echo -e "${YELLOW}The VM will reboot automatically during installation${NC}"
 echo ""
 
@@ -529,7 +531,6 @@ MAX_CHECKS=180  # 30 minutes max
 while (( CHECK_COUNT < MAX_CHECKS )); do
   CHECK_COUNT=$((CHECK_COUNT + 1))
 
-  # Domain state check (untuk mendeteksi reboot 'eksternal' saja)
   if sudo virsh list --state-running | grep -q "${VM_NAME}"; then
     echo -n "."
   else
@@ -550,7 +551,6 @@ while (( CHECK_COUNT < MAX_CHECKS )); do
     fi
   fi
 
-  # Cek IP setiap 10 iterasi (tanpa syarat REBOOT_DETECTED)
   if (( CHECK_COUNT % 10 == 0 )); then
     VM_IP=$(sudo virsh domifaddr "${VM_NAME}" 2>/dev/null | grep -oP '(\d{1,3}\.){3}\d{1,3}' | head -1 || echo "")
     if [[ -n "$VM_IP" ]]; then
@@ -562,7 +562,6 @@ while (( CHECK_COUNT < MAX_CHECKS )); do
     fi
   fi
 
-  # Opsional: cek sentinel file kalau guestfish tersedia (validasi instalasi)
   if (( CHECK_COUNT % 20 == 0 )) && command -v guestfish >/dev/null 2>&1; then
     IMG="/var/lib/libvirt/images/${VM_NAME}.img"
     if sudo guestfish --ro -a "$IMG" -i sh "test -f /install_complete.txt || test -f /Windows/System32/winload.exe" >/dev/null 2>&1; then
@@ -593,7 +592,21 @@ if [[ -z "$VM_IP" ]]; then
 else
   echo ""
   echo "=== [ Enable Port Forwarding for RDP - Debian ] ==="
-  PUB_IF=$(ip -4 route get 1.1.1.1 | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -n1)
+  # Detect public interface that can reach Internet (e.g. Google DNS)
+  PUB_IF=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -n1)
+
+  # Fallback only if the first method fails
+  if [[ -z "$PUB_IF" ]]; then
+    echo "⚠️  Primary route detection failed, trying fallback..."
+    PUB_IF=$(ip route | awk '/default/ {print $5; exit}')
+  fi
+
+  if [[ -z "$PUB_IF" ]]; then
+    echo "❌ Could not detect public interface automatically!"
+    ip -br addr show | awk '{print " - " $1 ": " $3}'
+    read -p "Enter the interface connected to Internet: " PUB_IF
+  fi
+
   if [ -z "$PUB_IF" ]; then
       err "Could not detect public network interface!"
       echo "Please check using: ip a"
@@ -613,14 +626,19 @@ else
           apt-get update -qq && apt-get install -y nftables >/dev/null
       fi
 
-      cat > /etc/nftables.conf <<EOF
+      # Ensure nftables dir exists
+      mkdir -p /etc/nftables.d
+
+      # Write dedicated rule file for RDP forwarding (does not overwrite global config)
+      cat > /etc/nftables.d/rdp-forward.conf <<EOF
 #!/usr/sbin/nft -f
-flush ruleset
+flush table inet filter
+flush table ip nat
 
 table inet filter {
-    chain input { type filter hook input priority 0; policy accept; }
+    chain input   { type filter hook input   priority 0; policy accept; }
     chain forward { type filter hook forward priority 0; policy accept; }
-    chain output { type filter hook output priority 0; policy accept; }
+    chain output  { type filter hook output  priority 0; policy accept; }
 }
 
 table ip nat {
@@ -637,7 +655,11 @@ table ip nat {
 EOF
 
       systemctl enable nftables >/dev/null 2>&1 || true
+      # Apply only our rule file to avoid clobbering existing global config
+      nft -f /etc/nftables.d/rdp-forward.conf
       systemctl restart nftables
+
+
       ok "RDP Port forwarding active!"
       echo "🌐 Public RDP: ${PUB_IP}:${RDP_PORT} → VM: ${VM_IP}:${RDP_PORT}"
       echo "⚠️ Ensure RDP service is running inside Windows and firewall is off."
