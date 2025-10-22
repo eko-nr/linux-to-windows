@@ -355,14 +355,15 @@ ok "Autounattend.xml generated with username: ${WIN_USERNAME}"
 # --- Create Floppy Image with autounattend.xml ---
 FLOPPY_IMG="${ISO_CACHE}/autounattend-${VM_NAME}.img"
 step "Creating floppy image with autounattend.xml..."
-sudo dd if=/dev/zero of="$FLOPPY_IMG" bs=1024 count=1440 2>/dev/null
-sudo mkfs.vfat "$FLOPPY_IMG" >/dev/null 2>&1
+sudo dd if=/dev/zero of="$FLOPPY_IMG" bs=1024 count=1440 status=none 2>&1 || { err "Failed to create floppy image"; cleanup_and_exit; }
+sudo mkfs.vfat -F 12 "$FLOPPY_IMG" 2>&1 | grep -v "warning" || { err "Failed to format floppy"; cleanup_and_exit; }
 FLOPPY_MOUNT="/mnt/floppy-tmp-${VM_NAME}"
 sudo mkdir -p "$FLOPPY_MOUNT"
-sudo mount -o loop "$FLOPPY_IMG" "$FLOPPY_MOUNT"
-sudo cp "$AUTOUNATTEND_DIR/autounattend.xml" "$FLOPPY_MOUNT/autounattend.xml"
-sync
-sudo umount "$FLOPPY_MOUNT"; sudo rmdir "$FLOPPY_MOUNT"
+sudo mount -o loop "$FLOPPY_IMG" "$FLOPPY_MOUNT" || { err "Failed to mount floppy"; cleanup_and_exit; }
+sudo cp "$AUTOUNATTEND_DIR/autounattend.xml" "$FLOPPY_MOUNT/autounattend.xml" || { err "Failed to copy autounattend.xml"; sudo umount "$FLOPPY_MOUNT" 2>/dev/null; cleanup_and_exit; }
+sudo sync
+sudo umount "$FLOPPY_MOUNT" || true
+sudo rmdir "$FLOPPY_MOUNT" 2>/dev/null || true
 ok "Floppy image created: ${FLOPPY_IMG}"
 
 # --- Create Disk ---
