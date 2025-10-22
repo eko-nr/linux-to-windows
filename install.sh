@@ -385,9 +385,8 @@ fi
 sudo systemctl restart libvirtd
 ok "AppArmor disabled for libvirt"
 
-sudo virsh net-destroy default 2>/dev/null
-sudo virsh net-undefine default 2>/dev/null
-
+sudo systemctl restart libvirtd && sudo modprobe bridge vhost_net tap tun && \
+sudo virsh net-destroy default 2>/dev/null; sudo virsh net-undefine default 2>/dev/null; \
 cat <<EOF | sudo virsh net-define /dev/stdin
 <network>
   <name>default</name>
@@ -400,10 +399,9 @@ cat <<EOF | sudo virsh net-define /dev/stdin
   </ip>
 </network>
 EOF
-
-sudo virsh net-start default
-sudo virsh net-autostart default
-
+sudo virsh net-start default && sudo virsh net-autostart default && sudo virsh net-list --all
+sleep 5
+sudo virsh net-list --all
 
 # --- Create VM with Performance Optimizations ---
 header "Creating Virtual Machine"
