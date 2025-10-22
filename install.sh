@@ -385,13 +385,13 @@ fi
 sudo systemctl restart libvirtd
 ok "AppArmor disabled for libvirt"
 
-# Ensure default network exists and has DHCP
-if ! sudo virsh net-info default &>/dev/null; then
-  echo "Creating persistent default network with DHCP..."
-  cat <<EOF | sudo virsh net-define /dev/stdin
+sudo virsh net-destroy default 2>/dev/null
+sudo virsh net-undefine default 2>/dev/null
+
+cat <<EOF | sudo virsh net-define /dev/stdin
 <network>
   <name>default</name>
-  <bridge name="virbr0" />
+  <bridge name="virbr0"/>
   <forward mode="nat"/>
   <ip address="192.168.122.1" netmask="255.255.255.0">
     <dhcp>
@@ -400,9 +400,10 @@ if ! sudo virsh net-info default &>/dev/null; then
   </ip>
 </network>
 EOF
-fi
-sudo virsh net-start default || true
-sudo virsh net-autostart default || true
+
+sudo virsh net-start default
+sudo virsh net-autostart default
+
 
 # --- Create VM with Performance Optimizations ---
 header "Creating Virtual Machine"
