@@ -724,22 +724,7 @@ done
 if [[ -f "$PORT_FORWARD_SCRIPT" ]]; then
   echo ""
   echo "🚀 Configuring RDP port forwarding..."
-  if sudo bash "$PORT_FORWARD_SCRIPT"; then
-    ok "Port forwarding active! Check output above for RDP connection details."
-  else
-    EXIT_CODE=$?
-    warn "⚠️  Port forwarding setup failed (exit code: $EXIT_CODE)"
-    echo ""
-    echo "💡 Possible causes:"
-    echo "   • No VMs have received IP addresses yet"
-    echo "   • nftables configuration error"
-    echo "   • Network interface detection failed"
-    echo ""
-    echo "🔧 Troubleshooting:"
-    echo "   sudo virsh domifaddr ${VM_NAME}  # Check VM IP"
-    echo "   sudo nft list ruleset             # Check nftables rules"
-    echo "   sudo bash \"$PORT_FORWARD_SCRIPT\"         # Retry manually"
-  fi
+  sudo bash "$PORT_FORWARD_SCRIPT"
 else
   warn "enable_port_forward_rdp.sh not found in $SCRIPT_DIR. Skipping auto-configuration."
   echo "Download and run manually when VM is ready."
