@@ -4,6 +4,9 @@
 # Full automation with reboot handling (FIXED windowsPE parsing)
 # ============================================================
 
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PORT_FORWARD_SCRIPT="$SCRIPT_DIR/enable_port_forward_rdp.sh"
+
 set -euo pipefail
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 header() { echo -e "\n${GREEN}=== $1 ===${NC}"; }
@@ -685,10 +688,11 @@ for i in $(seq 1 $MAX_WAIT); do
   sleep 1
 done
 
-if [[ -f "./enable_port_forward_rdp.sh" ]]; then
+# Check if script exists
+if [[ -f "$PORT_FORWARD_SCRIPT" ]]; then
   echo ""
   echo "🚀 Configuring RDP port forwarding..."
-  if sudo bash ./enable_port_forward_rdp.sh; then
+  if sudo bash "$PORT_FORWARD_SCRIPT"; then
     ok "Port forwarding active! Check output above for RDP connection details."
   else
     EXIT_CODE=$?
@@ -702,10 +706,10 @@ if [[ -f "./enable_port_forward_rdp.sh" ]]; then
     echo "🔧 Troubleshooting:"
     echo "   sudo virsh domifaddr ${VM_NAME}  # Check VM IP"
     echo "   sudo nft list ruleset             # Check nftables rules"
-    echo "   sudo bash ./enable_port_forward_rdp.sh  # Retry manually"
+    echo "   sudo bash \"$PORT_FORWARD_SCRIPT\"         # Retry manually"
   fi
 else
-  warn "enable_port_forward_rdp.sh not found. Skipping auto-configuration."
+  warn "enable_port_forward_rdp.sh not found in $SCRIPT_DIR. Skipping auto-configuration."
   echo "Download and run manually when VM is ready."
 fi
 
