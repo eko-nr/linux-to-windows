@@ -126,22 +126,14 @@ sudo apt install -y \
  libvirt-daemon-system libvirt-clients nftables
 
 
-header() { echo "=== $1 ==="; }
-
 # --- libvirt check ---
 header "Checking libvirt/virsh"
-SKIP_BUILD=false
-
-if command -v virsh &>/dev/null; then
-  VER=$(virsh --version 2>/dev/null | tr -d '\r\n[:space:]')
-  if [[ "$VER" == "11.8.0" ]]; then
-    echo "OK: libvirt $VER detected — skipping build"
-    SKIP_BUILD=true
-  else
-    echo "WARN: Detected libvirt $VER → rebuilding to 11.8.0"
-  fi
+VER=$(virsh --version 2>/dev/null | tr -d '\r\n[:space:]')
+if [[ "$VER" == "11.8.0" ]]; then
+  echo "OK: libvirt $VER detected — skipping build"
+  SKIP_BUILD=true
 else
-  echo "WARN: libvirt not found, building 11.8.0"
+  echo "WARN: Detected libvirt $VER → rebuilding to 11.8.0"
 fi
 
 # --- Build libvirt 11.8.0 ---
