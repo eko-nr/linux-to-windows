@@ -147,13 +147,46 @@ if [[ "$SKIP_BUILD" == false ]]; then
       warn "Fallback to v11.7.0"; sudo git clone --branch v11.7.0 --depth 1 https://github.com/libvirt/libvirt.git; }
   fi
   cd libvirt
-  step "Configuring Meson..."; sudo meson setup build --prefix=/usr -Ddriver_libvirtd=enabled -Ddriver_remote=enabled -Dsystem=true
-  step "Building with Ninja..."; sudo ninja -C build
-  step "Installing..."; sudo ninja -C build install
-  sudo systemctl daemon-reexec; sudo systemctl daemon-reload
-  sudo systemctl enable --now libvirtd
+  step "Configuring Meson..."
+  # force install libs to /usr/lib (not /usr/lib64, which breaks on Ubuntu/Debian)
+  sudo meson setup build \
+    --prefix=/usr \
+    --libdir=/usr/lib \
+    -Ddriver_libvirtd=enabled \
+    -Ddriver_remote=enabled \
+    -Dsystem=true
+
+  step "Building with Ninja..."
+  sudo ninja -C build
+
+  step "Installing..."
+  sudo ninja -C build install
+
+  # re-register daemons
+  sudo systemctl daemon-reexec
+  sudo systemctl daemon-reload
+
+  # attempt to start libvirtd
+  sudo systemctl enable --now libvirtd || true
   sudo systemctl restart virtqemud.service 2>/dev/null || true
-  systemctl is-active --quiet libvirtd && ok "libvirt built & running" || { err "Failed to start libvirtd"; cleanup_and_exit; }
+
+  # fallback if libvirtd fails due to /usr/lib64 layout
+  if ! systemctl is-active --quiet libvirtd; then
+    warn "libvirtd failed to start — fixing library path..."
+    if [[ -d /usr/lib64/libvirt && ! -d /usr/lib/libvirt ]]; then
+      sudo ln -s /usr/lib64/libvirt /usr/lib/libvirt
+    fi
+    sudo systemctl restart libvirtd
+  fi
+
+  # final status check
+  if systemctl is-active --quiet libvirtd; then
+    ok "libvirt built & running"
+  else
+    err "Failed to start libvirtd even after fix"
+    cleanup_and_exit
+  fi
+
 fi
 
 # --- Swap setup ---
