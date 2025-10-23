@@ -119,7 +119,7 @@ sudo apt install -y \
  libjson-c-dev libxslt1-dev xsltproc gettext libreadline-dev \
  libncurses5-dev libtirpc-dev python3-docutils \
  libgnutls28-dev gnutls-bin libxml2-utils xorriso \
- dosfstools libguestfs-tools
+ dosfstools libguestfs-tools swtpm swtpm-tools
 
 # --- libvirt check ---
 header "Checking libvirt/virsh"
