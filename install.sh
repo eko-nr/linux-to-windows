@@ -179,6 +179,8 @@ if [[ "$SKIP_BUILD" == false ]]; then
   sudo systemctl daemon-reexec
   sudo systemctl daemon-reload
 
+  sudo apt install -y libvirt-daemon-system libvirt-clients
+
   # attempt to start libvirtd
   sudo systemctl enable --now libvirtd || true
   sudo systemctl restart virtqemud.service 2>/dev/null || true
