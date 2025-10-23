@@ -131,19 +131,14 @@ header "Checking libvirt/virsh"
 SKIP_BUILD=false
 
 set +e 
-if command -v virsh &>/dev/null; then
-  VER=$(virsh --version 2>/dev/null | tr -d '\r\n[:space:]')
-  if [[ "$VER" == "11.8.0" ]]; then
-    ok "libvirt $VER detected — skipping build"
-    SKIP_BUILD=true
-  else
-    warn "Detected libvirt $VER → rebuilding to 11.8.0"
-  fi
+VER=$(virsh --version 2>/dev/null | tr -d '\r\n[:space:]')
+if [[ "$VER" == "11.8.0" ]]; then
+  ok "libvirt $VER detected — skipping build"
+  SKIP_BUILD=true
 else
-  warn "libvirt not found, building 11.8.0"
+  warn "Detected libvirt $VER → rebuilding to 11.8.0"
 fi
 set -e  
-
 
 # --- Build libvirt 11.8.0 ---
 if [[ "$SKIP_BUILD" == false ]]; then
