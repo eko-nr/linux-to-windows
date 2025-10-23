@@ -185,6 +185,28 @@ if [[ "$SKIP_BUILD" == false ]]; then
   # final status check
   if systemctl is-active --quiet libvirtd; then
     ok "libvirt built & running"
+    # --- Ensure libvirt services auto-start on boot ---
+    sudo systemctl enable --now libvirtd virtqemud || true
+    ok "libvirt services enabled to start automatically"
+
+    # --- Ensure virsh available globally ---
+    if ! command -v virsh &>/dev/null && [[ -f /usr/local/bin/virsh ]]; then
+      sudo ln -sf /usr/local/bin/virsh /usr/bin/virsh
+    fi
+
+    # --- Ensure current user has libvirt permissions ---
+    if ! groups $USER | grep -q libvirt; then
+      sudo usermod -aG libvirt $USER
+      warn "User added to 'libvirt' group. Re-login or run 'newgrp libvirt' to apply."
+    fi
+
+    # --- Persist PATH for virsh if installed manually ---
+    if [[ ! -f /etc/profile.d/virsh.sh ]]; then
+      echo 'export PATH=$PATH:/usr/local/bin:/usr/bin' | sudo tee /etc/profile.d/virsh.sh >/dev/null
+    fi
+    source /etc/profile.d/virsh.sh
+    ok "virsh environment configured globally"
+
   else
     err "Failed to start libvirtd even after fix"
     cleanup_and_exit
