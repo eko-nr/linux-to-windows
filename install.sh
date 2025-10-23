@@ -601,93 +601,47 @@ done
 
 # --- Auto Port Forwarding for RDP ---
 header "Auto Configuring RDP Port Forwarding"
-echo "⏳ Waiting for VM IP to appear..."
 
-VM_IP="${VM_IP:-}"
-for i in {1..60}; do
-  [[ -n "$VM_IP" ]] && break
-  VM_IP=$(sudo virsh domifaddr "${VM_NAME}" 2>/dev/null | awk '/ipv4/ {print $4}' | cut -d'/' -f1 | head -n1 || true)
-  [[ -n "$VM_IP" ]] && echo "✅ Detected VM IP: $VM_IP"
-  sleep 5
+# Wait for VM to fully boot and get IP
+echo "⏳ Waiting for VM network initialization..."
+echo "   (This may take 30-60 seconds for Windows to boot and get IP address)"
+
+# Smart wait: check if VMs are getting IPs
+MAX_WAIT=60
+for i in $(seq 1 $MAX_WAIT); do
+  VM_COUNT=$(virsh list --name | grep -v '^$' | wc -l)
+  if [[ $VM_COUNT -gt 0 ]]; then
+    # Check if any VM has IP
+    HAS_IP=$(virsh list --name | while read vm; do
+      [[ -n "$vm" ]] && virsh domifaddr "$vm" 2>/dev/null | grep -q ipv4 && echo "yes" && break
+    done)
+    
+    if [[ "$HAS_IP" == "yes" ]]; then
+      echo "✓ VM IP detected after ${i} seconds"
+      sleep 5  # Extra buffer
+      break
+    fi
+  fi
+  
+  # Progress indicator
+  if [[ $((i % 10)) -eq 0 ]]; then
+    echo "   ... still waiting (${i}s / ${MAX_WAIT}s)"
+  fi
+  sleep 1
 done
 
-if [[ -z "$VM_IP" ]]; then
-  warn "VM IP not detected after 5 minutes. Skipping port forwarding."
-else
+if [[ -f "./enable_port_forward_rdp.sh" ]]; then
   echo ""
-  echo "=== [ Enable Port Forwarding for RDP - Debian ] ==="
-  # Detect public interface that can reach Internet (e.g. Google DNS)
-  PUB_IF=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -n1)
-
-  # Fallback only if the first method fails
-  if [[ -z "$PUB_IF" ]]; then
-    echo "⚠️  Primary route detection failed, trying fallback..."
-    PUB_IF=$(ip route | awk '/default/ {print $5; exit}')
-  fi
-
-  if [[ -z "$PUB_IF" ]]; then
-    echo "❌ Could not detect public interface automatically!"
-    ip -br addr show | awk '{print " - " $1 ": " $3}'
-    read -p "Enter the interface connected to Internet: " PUB_IF
-  fi
-
-  if [ -z "$PUB_IF" ]; then
-      err "Could not detect public network interface!"
-      echo "Please check using: ip a"
+  echo "🚀 Configuring RDP port forwarding..."
+  if sudo bash ./enable_port_forward_rdp.sh; then
+    success "✅ Port forwarding active! Check output above for RDP connection details."
   else
-      PUB_IP=$(ip -4 addr show dev "$PUB_IF" | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n1)
-      echo "Detected public interface: $PUB_IF ($PUB_IP)"
-      RDP_PORT=3389
-      echo ""
-      echo "Forwarding RDP (TCP+UDP) from $PUB_IP:$RDP_PORT → $VM_NAME ($VM_IP:$RDP_PORT)"
-      echo ""
-
-      sysctl -w net.ipv4.ip_forward=1 >/dev/null
-      grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf || echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
-
-      if ! command -v nft >/dev/null 2>&1; then
-          echo "Installing nftables..."
-          apt-get update -qq && apt-get install -y nftables >/dev/null
-      fi
-
-      # Ensure nftables dir exists
-      mkdir -p /etc/nftables.d
-
-      # Write dedicated rule file for RDP forwarding (does not overwrite global config)
-      cat > /etc/nftables.d/rdp-forward.conf <<EOF
-#!/usr/sbin/nft -f
-delete table inet filter
-delete table ip nat
-
-table inet filter {
-    chain input   { type filter hook input   priority 0; policy accept; }
-    chain forward { type filter hook forward priority 0; policy accept; }
-    chain output  { type filter hook output  priority 0; policy accept; }
-}
-
-table ip nat {
-    chain prerouting {
-        type nat hook prerouting priority 0;
-        iif "$PUB_IF" tcp dport $RDP_PORT dnat to $VM_IP:$RDP_PORT
-        iif "$PUB_IF" udp dport $RDP_PORT dnat to $VM_IP:$RDP_PORT
-    }
-    chain postrouting {
-        type nat hook postrouting priority 100;
-        oif "$PUB_IF" masquerade
-    }
-}
-EOF
-
-      systemctl enable nftables >/dev/null 2>&1 || true
-      # Apply only our rule file to avoid clobbering existing global config
-      nft -f /etc/nftables.d/rdp-forward.conf
-      systemctl restart nftables
-
-
-      ok "RDP Port forwarding active!"
-      echo "🌐 Public RDP: ${PUB_IP}:${RDP_PORT} → VM: ${VM_IP}:${RDP_PORT}"
-      echo "⚠️ Ensure RDP service is running inside Windows and firewall is off."
+    warn "⚠️  No active VMs detected or setup failed."
+    echo "💡 Run manually when VM is ready: sudo bash ./enable_port_forward_rdp.sh"
   fi
+else
+  warn "enable_port_forward_rdp.sh not found. Skipping auto-configuration."
+  echo "Download and run manually from: [your repo URL]"
 fi
 
 echo ""
