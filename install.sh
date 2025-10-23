@@ -193,20 +193,29 @@ fi
 
 # Final check
 if systemctl is-active --quiet libvirtd && command -v virsh &>/dev/null; then
-  ok "libvirt is active and virsh works correctly"
+  # --- User/group setup for libvirt ---
+  if ! getent group libvirt >/dev/null; then
+    sudo groupadd -r libvirt
+    ok "Group 'libvirt' created"
+  fi
+
+  # Only add user if not root
+  if [[ "$EUID" -ne 0 ]]; then
+    if ! groups $USER | grep -q libvirt; then
+      sudo usermod -aG libvirt $USER
+      warn "User added to 'libvirt' group. Run 'newgrp libvirt' to refresh session."
+    fi
+  else
+    ok "Running as root — skipping usermod step"
+  fi
+
+  ok "libvirt group setup verified"
+
 else
   warn "⚠ libvirt not fully functional — installing system version as fallback"
   sudo apt install -y libvirt-daemon-system libvirt-clients
   sudo systemctl enable --now libvirtd virtqemud
 fi
-
-# --- User group setup ---
-if ! groups $USER | grep -q libvirt; then
-  sudo usermod -aG libvirt $USER
-  warn "User added to 'libvirt' group. Run 'newgrp libvirt' to refresh session."
-fi
-ok "libvirt setup verified"
-
 
 # --- Swap setup ---
 header "Configuring Swap"
