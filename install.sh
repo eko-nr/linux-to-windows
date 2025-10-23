@@ -455,7 +455,7 @@ sudo virt-install \
   --check path_in_use=off \
   --features hyperv_relaxed=on,hyperv_vapic=on,hyperv_spinlocks=on,hyperv_spinlocks_retries=8191 \
   --clock hypervclock_present=yes \
-  --tpm backend.type=emulator,model=tpm-tis \
+  --tpm backend.type=emulator,model=tpm-crb \
   --rng device=/dev/urandom \
   --noautoconsole
 ok "VM created: ${VM_NAME}"
