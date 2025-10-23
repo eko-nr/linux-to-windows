@@ -125,20 +125,28 @@ sudo apt install -y \
  dosfstools libguestfs-tools swtpm swtpm-tools \
  libvirt-daemon-system libvirt-clients nftables
 
-
 # --- libvirt check ---
 header "Checking libvirt/virsh"
 SKIP_BUILD=false
 
-set +e 
-VER=$(virsh --version 2>/dev/null | tr -d '\r\n[:space:]')
-if [[ "$VER" == "11.8.0" ]]; then
-  ok "libvirt $VER detected — skipping build"
-  SKIP_BUILD=true
+set +e
+if command -v virsh &>/dev/null; then
+  # Clean and normalize version string
+  VER_RAW=$(virsh --version 2>/dev/null || echo "unknown")
+  VER=$(echo "$VER_RAW" | tr -d '\r' | tr -d '\n' | tr -d '[:space:]')
+  echo "Detected virsh version raw: '$VER_RAW' | parsed: '$VER'"
+
+  # Match version regardless of distro suffixes (e.g. 11.8.0-1ubuntu1)
+  if echo "$VER" | grep -qE '^11\.8(\.0)?($|[^0-9])'; then
+    ok "libvirt $VER detected — skipping build"
+    SKIP_BUILD=true
+  else
+    warn "Detected libvirt $VER → rebuilding to 11.8.0"
+  fi
 else
-  warn "Detected libvirt $VER → rebuilding to 11.8.0"
+  warn "libvirt not found, building 11.8.0"
 fi
-set -e  
+set -e 
 
 # --- Build libvirt 11.8.0 ---
 if [[ "$SKIP_BUILD" == false ]]; then
