@@ -235,7 +235,28 @@ ISO_FILE="${ISO_CACHE}/Windows10-Ltsc.iso"
 ISO_LINK="/var/lib/libvirt/boot/Windows10-Ltsc.iso"
 sudo mkdir -p "$ISO_CACHE" /var/lib/libvirt/boot
 
-# Ensure ISO exists and valid (>1GB)
+# --- Ensure required libvirt system users exist ---
+if ! getent group libvirt-qemu >/dev/null; then
+  sudo groupadd -r libvirt-qemu
+  ok "Group 'libvirt-qemu' created"
+fi
+
+if ! id libvirt-qemu &>/dev/null; then
+  sudo useradd -r -g libvirt-qemu -d /var/lib/libvirt -s /usr/sbin/nologin libvirt-qemu
+  ok "User 'libvirt-qemu' created"
+fi
+
+if ! getent group libvirt-dnsmasq >/dev/null; then
+  sudo groupadd -r libvirt-dnsmasq
+  ok "Group 'libvirt-dnsmasq' created"
+fi
+
+if ! id libvirt-dnsmasq &>/dev/null; then
+  sudo useradd -r -g libvirt-dnsmasq -d /var/lib/libvirt/dnsmasq -s /usr/sbin/nologin libvirt-dnsmasq
+  ok "User 'libvirt-dnsmasq' created"
+fi
+
+# --- Ensure Windows ISO ---
 if [[ ! -f "$ISO_FILE" || $(stat -c%s "$ISO_FILE" 2>/dev/null || echo 0) -lt 1000000000 ]]; then
   step "Downloading Windows 10 LTSC ISO..."
   sudo wget -O "$ISO_FILE" "https://archive.org/download/windows-10-ltsc-enterprise-feb-2019/17763.2028/Windows_10__ENT_LTSC_OEM-June_x64_multilingual%5B17763.2028%5D.iso"
@@ -247,7 +268,14 @@ fi
 if [[ ! -f "$ISO_LINK" ]]; then
   sudo cp -f "$ISO_FILE" "$ISO_LINK"
 fi
-sudo chown libvirt-qemu:libvirt-qemu "$ISO_LINK"
+
+# Apply safe permissions
+if id libvirt-qemu &>/dev/null; then
+  sudo chown libvirt-qemu:libvirt-qemu "$ISO_LINK"
+else
+  warn "User 'libvirt-qemu' not found — using root ownership"
+  sudo chown root:root "$ISO_LINK"
+fi
 sudo chmod 644 "$ISO_LINK"
 
 # --- Download virtio drivers ---
@@ -266,7 +294,14 @@ fi
 if [[ ! -f "$VIRTIO_LINK" ]]; then
   sudo cp -f "$VIRTIO_FILE" "$VIRTIO_LINK"
 fi
-sudo chown libvirt-qemu:libvirt-qemu "$VIRTIO_LINK"
+
+# Apply safe permissions
+if id libvirt-qemu &>/dev/null; then
+  sudo chown libvirt-qemu:libvirt-qemu "$VIRTIO_LINK"
+else
+  warn "User 'libvirt-qemu' not found — using root ownership"
+  sudo chown root:root "$VIRTIO_LINK"
+fi
 sudo chmod 644 "$VIRTIO_LINK"
 
 
