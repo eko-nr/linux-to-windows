@@ -555,6 +555,30 @@ ok "Default network active with DHCP"
 
 # --- Create VM with Performance Optimizations ---
 header "Creating Virtual Machine"
+
+# --- Ensure KVM permission for libvirt-qemu ---
+header "Checking KVM access"
+if [[ -e /dev/kvm ]]; then
+  sudo chown root:kvm /dev/kvm
+  sudo chmod 660 /dev/kvm
+  if id libvirt-qemu &>/dev/null; then
+    sudo usermod -aG kvm libvirt-qemu || true
+    ok "libvirt-qemu added to kvm group"
+  else
+    warn "libvirt-qemu user not found; skipping group assignment"
+  fi
+  sudo systemctl restart libvirtd || true
+  if sudo -u libvirt-qemu test -r /dev/kvm; then
+    ok "libvirt-qemu can access /dev/kvm"
+  else
+    warn "⚠ libvirt-qemu still cannot access /dev/kvm — fallback to software virtualization"
+    USE_TCG=true
+  fi
+else
+  warn "/dev/kvm not found — falling back to software virtualization (TCG)"
+  USE_TCG=true
+fi
+
 sudo virt-install \
   --name "${VM_NAME}" \
   --ram "${RAM_SIZE}" \
