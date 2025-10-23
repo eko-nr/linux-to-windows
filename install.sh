@@ -152,6 +152,7 @@ if [[ "$SKIP_BUILD" == false ]]; then
   step "Installing..."; sudo ninja -C build install
   sudo systemctl daemon-reexec; sudo systemctl daemon-reload
   sudo systemctl enable --now libvirtd
+  sudo systemctl restart virtqemud.service 2>/dev/null || true
   systemctl is-active --quiet libvirtd && ok "libvirt built & running" || { err "Failed to start libvirtd"; cleanup_and_exit; }
 fi
 
@@ -172,22 +173,41 @@ ISO_CACHE="/opt/vm-isos"
 ISO_FILE="${ISO_CACHE}/Windows10-Ltsc.iso"
 ISO_LINK="/var/lib/libvirt/boot/Windows10-Ltsc.iso"
 sudo mkdir -p "$ISO_CACHE" /var/lib/libvirt/boot
-if [[ ! -f "$ISO_FILE" ]]; then
+
+# Ensure ISO exists and valid (>1GB)
+if [[ ! -f "$ISO_FILE" || $(stat -c%s "$ISO_FILE" 2>/dev/null || echo 0) -lt 1000000000 ]]; then
   step "Downloading Windows 10 LTSC ISO..."
   sudo wget -O "$ISO_FILE" "https://archive.org/download/windows-10-ltsc-enterprise-feb-2019/17763.2028/Windows_10__ENT_LTSC_OEM-June_x64_multilingual%5B17763.2028%5D.iso"
-else ok "Using cached ISO: $ISO_FILE"; fi
-sudo ln -sf "$ISO_FILE" "$ISO_LINK"
+else
+  ok "Using cached ISO: $ISO_FILE"
+fi
+
+# Always ensure ISO available in libvirt boot path
+if [[ ! -f "$ISO_LINK" ]]; then
+  sudo cp -f "$ISO_FILE" "$ISO_LINK"
+fi
+sudo chown libvirt-qemu:libvirt-qemu "$ISO_LINK"
+sudo chmod 644 "$ISO_LINK"
 
 # --- Download virtio drivers ---
 header "Preparing virtio Drivers"
 VIRTIO_FILE="${ISO_CACHE}/virtio-win.iso"
 VIRTIO_LINK="/var/lib/libvirt/boot/virtio-win.iso"
-if [[ ! -f "$VIRTIO_FILE" ]]; then
+
+if [[ ! -f "$VIRTIO_FILE" || $(stat -c%s "$VIRTIO_FILE" 2>/dev/null || echo 0) -lt 50000000 ]]; then
   step "Downloading latest virtio-win drivers..."
   sudo wget -O "$VIRTIO_FILE" "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/latest-virtio/virtio-win.iso"
   ok "virtio drivers downloaded"
-else ok "Using cached virtio drivers: $VIRTIO_FILE"; fi
-sudo ln -sf "$VIRTIO_FILE" "$VIRTIO_LINK"
+else
+  ok "Using cached virtio drivers: $VIRTIO_FILE"
+fi
+
+if [[ ! -f "$VIRTIO_LINK" ]]; then
+  sudo cp -f "$VIRTIO_FILE" "$VIRTIO_LINK"
+fi
+sudo chown libvirt-qemu:libvirt-qemu "$VIRTIO_LINK"
+sudo chmod 644 "$VIRTIO_LINK"
+
 
 # --- Generate autounattend.xml ---
 header "Generating Unattended Installation File"
