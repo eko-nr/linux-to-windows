@@ -443,7 +443,9 @@ sudo virt-install \
   --vcpus "${VCPU_COUNT}",maxvcpus="${VCPU_COUNT}",sockets=1,cores="${VCPU_COUNT}",threads=1 \
   --cpu host-passthrough,cache.mode=passthrough \
   --cdrom "${ISO_LINK}" \
-  --disk path="/var/lib/libvirt/images/${VM_NAME}.img",size="${DISK_SIZE}",bus=virtio,cache=none,io=threads,discard=unmap,detect_zeroes=unmap \
+  --disk path="/var/lib/libvirt/images/${VM_NAME}.img",size="${DISK_SIZE}",bus=scsi,discard=unmap,detect_zeroes=unmap,cache=none,io=threads \
+  --controller type=scsi,model=virtio-scsi \
+  --controller type=virtio-serial \
   --os-variant win10 \
   --network network=default,model=virtio \
   --graphics vnc,listen=0.0.0.0,port="${VNC_PORT}" \
@@ -453,6 +455,8 @@ sudo virt-install \
   --check path_in_use=off \
   --features hyperv_relaxed=on,hyperv_vapic=on,hyperv_spinlocks=on,hyperv_spinlocks_retries=8191 \
   --clock hypervclock_present=yes \
+  --tpm backend.type=emulator,model=tpm-tis \
+  --rng device=/dev/urandom \
   --noautoconsole
 ok "VM created: ${VM_NAME}"
 
@@ -632,8 +636,8 @@ else
       # Write dedicated rule file for RDP forwarding (does not overwrite global config)
       cat > /etc/nftables.d/rdp-forward.conf <<EOF
 #!/usr/sbin/nft -f
-flush table inet filter
-flush table ip nat
+delete table inet filter
+delete table ip nat
 
 table inet filter {
     chain input   { type filter hook input   priority 0; policy accept; }
