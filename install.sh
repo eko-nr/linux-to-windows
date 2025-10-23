@@ -460,6 +460,26 @@ sudo virt-install \
   --noautoconsole
 ok "VM created: ${VM_NAME}"
 
+# --- Enable Nested Virtualization ---
+echo "🔧 Checking for nested virtualization support..."
+if grep -q vmx /proc/cpuinfo; then
+  echo "🧠 Intel CPU detected — enabling nested virtualization"
+  sudo modprobe -r kvm_intel 2>/dev/null || true
+  sudo modprobe kvm_intel nested=1
+  echo "options kvm_intel nested=1" | sudo tee /etc/modprobe.d/kvm_intel.conf >/dev/null
+elif grep -q svm /proc/cpuinfo; then
+  echo "🧠 AMD CPU detected — enabling nested virtualization"
+  sudo modprobe -r kvm_amd 2>/dev/null || true
+  sudo modprobe kvm_amd nested=1
+  echo "options kvm_amd nested=1" | sudo tee /etc/modprobe.d/kvm_amd.conf >/dev/null
+else
+  warn "⚠️ No VMX/SVM virtualization extensions found; nested virtualization unavailable."
+fi
+
+# Ensure guest CPU gets VMX feature flag
+sudo virt-xml "${VM_NAME}" --edit --cpu host-passthrough,add_feature=vmx 2>/dev/null || true
+ok "Nested virtualization enabled for ${VM_NAME} (VMX passthrough active)"
+
 # --- Force boot order to HDD first ---
 echo "🧩 Forcing boot order: hard disk first"
 sudo virt-xml "${VM_NAME}" --edit --boot hd,cdrom || true
