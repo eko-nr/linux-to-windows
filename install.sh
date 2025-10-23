@@ -120,7 +120,7 @@ sudo apt install -y \
  libncurses5-dev libtirpc-dev python3-docutils \
  libgnutls28-dev gnutls-bin libxml2-utils xorriso \
  dosfstools libguestfs-tools swtpm swtpm-tools \
- libvirt-daemon-system libvirt-clients
+ libvirt-daemon-system libvirt-clients nftables
 
 
 # --- libvirt check ---
@@ -636,14 +636,24 @@ if [[ -f "./enable_port_forward_rdp.sh" ]]; then
   echo ""
   echo "🚀 Configuring RDP port forwarding..."
   if sudo bash ./enable_port_forward_rdp.sh; then
-    success "✅ Port forwarding active! Check output above for RDP connection details."
+    ok "Port forwarding active! Check output above for RDP connection details."
   else
-    warn "⚠️  No active VMs detected or setup failed."
-    echo "💡 Run manually when VM is ready: sudo bash ./enable_port_forward_rdp.sh"
+    EXIT_CODE=$?
+    warn "⚠️  Port forwarding setup failed (exit code: $EXIT_CODE)"
+    echo ""
+    echo "💡 Possible causes:"
+    echo "   • No VMs have received IP addresses yet"
+    echo "   • nftables configuration error"
+    echo "   • Network interface detection failed"
+    echo ""
+    echo "🔧 Troubleshooting:"
+    echo "   sudo virsh domifaddr ${VM_NAME}  # Check VM IP"
+    echo "   sudo nft list ruleset             # Check nftables rules"
+    echo "   sudo bash ./enable_port_forward_rdp.sh  # Retry manually"
   fi
 else
   warn "enable_port_forward_rdp.sh not found. Skipping auto-configuration."
-  echo "Download and run manually from: [your repo URL]"
+  echo "Download and run manually when VM is ready."
 fi
 
 echo ""
