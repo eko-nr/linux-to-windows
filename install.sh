@@ -123,6 +123,8 @@ sudo apt install -y \
  libncurses5-dev libtirpc-dev python3-docutils \
  libgnutls28-dev gnutls-bin libxml2-utils xorriso \
  dosfstools libguestfs-tools swtpm swtpm-tools nftables
+
+
 # --- libvirt check ---
 header "Checking libvirt/virsh"
 SKIP_BUILD=false
