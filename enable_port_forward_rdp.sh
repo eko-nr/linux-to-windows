@@ -16,26 +16,83 @@ PUB_IP=$(ip -4 addr show dev "$PUB_IF" | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | h
 echo "✓ Detected public interface: $PUB_IF ($PUB_IP)"
 echo
 
-# 2️⃣ Detect active VMs and their IPs via virsh
+# 2️⃣ Detect active VMs and their IPs via virsh with smart retry
 echo "🔍 Scanning for active VMs and their IPs..."
-VM_LIST=$(virsh list --name)
-if [ -z "$VM_LIST" ]; then
-    echo "❌ No running VMs detected. Start your Windows VM first!"
-    exit 1
-fi
+echo "   (Will retry every 2 seconds for up to 60 minutes)"
 
+MAX_ATTEMPTS=1800  # 60 minutes × 30 attempts per minute
+ATTEMPT=0
 declare -A VM_IPS
-while read -r VM; do
-    if [ -n "$VM" ]; then
-        IP=$(virsh domifaddr "$VM" 2>/dev/null | awk '/ipv4/ {print $4}' | cut -d'/' -f1 | head -n1)
-        if [ -n "$IP" ]; then
-            VM_IPS["$VM"]="$IP"
-        fi
-    fi
-done <<< "$VM_LIST"
 
+while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+    ATTEMPT=$((ATTEMPT + 1))
+    
+    # Get list of running VMs
+    VM_LIST=$(virsh list --name 2>/dev/null || true)
+    
+    if [ -z "$VM_LIST" ]; then
+        if [ $ATTEMPT -eq 1 ]; then
+            echo "⏳ No running VMs detected yet, waiting..."
+        fi
+        
+        # Progress indicator every 30 attempts (1 minute)
+        if [ $((ATTEMPT % 30)) -eq 0 ]; then
+            MINUTES=$((ATTEMPT / 30))
+            echo "   ... still waiting (${MINUTES} minute(s) elapsed)"
+        fi
+        
+        sleep 2
+        continue
+    fi
+    
+    # Try to get IPs for all VMs
+    VM_IPS=()
+    while read -r VM; do
+        if [ -n "$VM" ]; then
+            IP=$(virsh domifaddr "$VM" 2>/dev/null | awk '/ipv4/ {print $4}' | cut -d'/' -f1 | head -n1)
+            if [ -n "$IP" ]; then
+                VM_IPS["$VM"]="$IP"
+            fi
+        fi
+    done <<< "$VM_LIST"
+    
+    # If we found at least one VM with IP, break
+    if [ ${#VM_IPS[@]} -gt 0 ]; then
+        echo "✓ VM IP(s) detected after $((ATTEMPT * 2)) seconds"
+        break
+    fi
+    
+    # Show waiting message on first attempt
+    if [ $ATTEMPT -eq 1 ]; then
+        echo "⏳ VMs found but no IPs assigned yet, waiting for network initialization..."
+    fi
+    
+    # Progress indicator every 30 attempts (1 minute)
+    if [ $((ATTEMPT % 30)) -eq 0 ]; then
+        MINUTES=$((ATTEMPT / 30))
+        echo "   ... still waiting for VM IPs (${MINUTES} minute(s) elapsed)"
+    fi
+    
+    sleep 2
+done
+
+# Check if we timed out
 if [ ${#VM_IPS[@]} -eq 0 ]; then
-    echo "❌ No VM IPs detected. Ensure the VMs have network connectivity and Guest Agent is installed."
+    echo ""
+    echo "❌ Timeout: No VM IPs detected after 60 minutes."
+    echo ""
+    echo "💡 Possible causes:"
+    echo "   • VMs are not running"
+    echo "   • VMs haven't finished booting"
+    echo "   • QEMU Guest Agent not installed in VMs"
+    echo "   • Network interface not configured in VMs"
+    echo ""
+    echo "🔧 Troubleshooting:"
+    echo "   sudo virsh list --all              # Check VM status"
+    echo "   sudo virsh domifaddr <vm-name>     # Check specific VM IP"
+    echo "   sudo virsh net-list --all          # Check network status"
+    echo ""
+    echo "You can run this script manually later when VMs are ready."
     exit 1
 fi
 
