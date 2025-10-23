@@ -130,9 +130,13 @@ sudo apt install -y \
 header "Checking libvirt/virsh"
 SKIP_BUILD=false
 if command -v virsh &>/dev/null; then
-  VER=$(virsh --version 2>/dev/null || echo "unknown")
-  if [[ "$VER" == "11.8.0" ]]; then ok "libvirt 11.8.0 detected — skipping build"; SKIP_BUILD=true
-  else warn "Detected libvirt $VER → rebuilding to 11.8.0"; fi
+  VER=$(virsh --version 2>/dev/null | tr -d '\r' | head -n1 || echo "unknown")
+  if [[ "$VER" == 11.8.* ]]; then
+    ok "libvirt $VER detected — skipping build"
+    SKIP_BUILD=true
+  else
+    warn "Detected libvirt $VER → rebuilding to 11.8.0"
+  fi
 else
   warn "libvirt not found, building 11.8.0"
 fi
