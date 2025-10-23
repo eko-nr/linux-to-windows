@@ -123,108 +123,88 @@ sudo apt install -y \
  libncurses5-dev libtirpc-dev python3-docutils \
  libgnutls28-dev gnutls-bin libxml2-utils xorriso \
  dosfstools libguestfs-tools swtpm swtpm-tools nftables
-
 # --- libvirt check ---
 header "Checking libvirt/virsh"
 SKIP_BUILD=false
 
 set +e
 if command -v virsh &>/dev/null; then
-  # Clean and normalize version string
   VER_RAW=$(virsh --version 2>/dev/null || echo "unknown")
-  VER=$(echo "$VER_RAW" | tr -d '\r' | tr -d '\n' | tr -d '[:space:]')
-  echo "Detected virsh version raw: '$VER_RAW' | parsed: '$VER'"
+  VER=$(echo "$VER_RAW" | tr -d '\r\n[:space:]')
+  echo "Detected virsh version: $VER"
 
-  # Match version regardless of distro suffixes (e.g. 11.8.0-1ubuntu1)
-  if echo "$VER" | grep -qE '^11\.8(\.0)?($|[^0-9])'; then
-    ok "libvirt $VER detected — skipping build"
+  if echo "$VER" | grep -qE '^11\.8'; then
+    ok "libvirt $VER detected — build skipped"
     SKIP_BUILD=true
   else
-    warn "Detected libvirt $VER → rebuilding to 11.8.0"
+    warn "Detected libvirt version $VER → rebuilding or fixing path..."
   fi
 else
-  warn "libvirt not found, building 11.8.0"
+  warn "virsh not found, attempting to build libvirt 11.8.0"
 fi
-set -e 
+set -e
 
-# --- Build libvirt 11.8.0 ---
+# --- Ensure libvirt library consistency ---
+header "Ensuring libvirt consistency"
+sudo systemctl stop libvirtd virtqemud 2>/dev/null || true
+sudo ldconfig
+
+# Detect mismatched installs
+if [[ -f /usr/bin/virsh && -f /usr/lib/x86_64-linux-gnu/libvirt.so.0 ]]; then
+  if ! strings /usr/lib/x86_64-linux-gnu/libvirt.so.0 | grep -q 'LIBVIRT_11'; then
+    warn "Old libvirt library detected — cleaning up"
+    sudo apt remove --purge -y libvirt-daemon-system libvirt-daemon libvirt-clients || true
+    sudo rm -rf /usr/lib/x86_64-linux-gnu/libvirt* /usr/lib/libvirt* /usr/local/lib/libvirt* || true
+  fi
+fi
+
+# --- Build or fallback ---
 if [[ "$SKIP_BUILD" == false ]]; then
-  header "Building libvirt 11.8.0 from GitHub"
-  sudo systemctl stop libvirtd 2>/dev/null || true
-  sudo apt remove -y libvirt-daemon-system libvirt-clients libvirt-daemon || true
+  header "Building libvirt 11.8.0"
   cd /usr/src; sudo rm -rf libvirt
-  step "Cloning libvirt v11.8.0..."
   if ! sudo git clone --branch v11.8.0 --depth 1 https://github.com/libvirt/libvirt.git; then
-    warn "Tag v11.8.0 not found, trying v11.8.1..."
-    sudo git clone --branch v11.8.1 --depth 1 https://github.com/libvirt/libvirt.git || {
-      warn "Fallback to v11.7.0"; sudo git clone --branch v11.7.0 --depth 1 https://github.com/libvirt/libvirt.git; }
-  fi
-  cd libvirt
-  step "Configuring Meson..."
-  # force install libs to /usr/lib (not /usr/lib64, which breaks on Ubuntu/Debian)
-  sudo meson setup build \
-    --prefix=/usr \
-    --libdir=/usr/lib \
-    -Ddriver_libvirtd=enabled \
-    -Ddriver_remote=enabled \
-    -Dsystem=true
-
-  step "Building with Ninja..."
-  sudo ninja -C build
-
-  step "Installing..."
-  sudo ninja -C build install
-
-  # re-register daemons
-  sudo systemctl daemon-reexec
-  sudo systemctl daemon-reload
-
-  sudo apt install -y libvirt-daemon-system libvirt-clients
-
-  # attempt to start libvirtd
-  sudo systemctl enable --now libvirtd || true
-  sudo systemctl restart virtqemud.service 2>/dev/null || true
-
-  # fallback if libvirtd fails due to /usr/lib64 layout
-  if ! systemctl is-active --quiet libvirtd; then
-    warn "libvirtd failed to start — fixing library path..."
-    if [[ -d /usr/lib64/libvirt && ! -d /usr/lib/libvirt ]]; then
-      sudo ln -s /usr/lib64/libvirt /usr/lib/libvirt
-    fi
-    sudo systemctl restart libvirtd
-  fi
-
-  # final status check
-  if systemctl is-active --quiet libvirtd; then
-    ok "libvirt built & running"
-    # --- Ensure libvirt services auto-start on boot ---
-    sudo systemctl enable --now libvirtd virtqemud || true
-    ok "libvirt services enabled to start automatically"
-
-    # --- Ensure virsh available globally ---
-    if ! command -v virsh &>/dev/null && [[ -f /usr/local/bin/virsh ]]; then
-      sudo ln -sf /usr/local/bin/virsh /usr/bin/virsh
-    fi
-
-    # --- Ensure current user has libvirt permissions ---
-    if ! groups $USER | grep -q libvirt; then
-      sudo usermod -aG libvirt $USER
-      warn "User added to 'libvirt' group. Re-login or run 'newgrp libvirt' to apply."
-    fi
-
-    # --- Persist PATH for virsh if installed manually ---
-    if [[ ! -f /etc/profile.d/virsh.sh ]]; then
-      echo 'export PATH=$PATH:/usr/local/bin:/usr/bin' | sudo tee /etc/profile.d/virsh.sh >/dev/null
-    fi
-    source /etc/profile.d/virsh.sh
-    ok "virsh environment configured globally"
-
+    warn "Could not fetch v11.8.0, falling back to latest stable from apt"
+    sudo apt update -y && sudo apt install -y libvirt-daemon-system libvirt-clients
+    SKIP_BUILD=true
   else
-    err "Failed to start libvirtd even after fix"
-    cleanup_and_exit
+    cd libvirt
+    sudo meson setup build --prefix=/usr --libdir=/usr/lib -Dsystem=true
+    sudo ninja -C build && sudo ninja -C build install
   fi
-
 fi
+
+# --- Post-install sanity check ---
+header "Validating libvirt installation"
+sudo ldconfig
+sudo systemctl daemon-reexec
+sudo systemctl daemon-reload
+sudo systemctl enable --now libvirtd virtqemud || true
+sleep 2
+
+if ! systemctl is-active --quiet libvirtd; then
+  warn "libvirtd failed to start, attempting recovery..."
+  if [[ -d /usr/lib64/libvirt && ! -d /usr/lib/libvirt ]]; then
+    sudo ln -sf /usr/lib64/libvirt /usr/lib/libvirt
+  fi
+  sudo systemctl restart libvirtd || true
+fi
+
+# Final check
+if systemctl is-active --quiet libvirtd && command -v virsh &>/dev/null; then
+  ok "libvirt is active and virsh works correctly"
+else
+  warn "⚠ libvirt not fully functional — installing system version as fallback"
+  sudo apt install -y libvirt-daemon-system libvirt-clients
+  sudo systemctl enable --now libvirtd virtqemud
+fi
+
+# --- User group setup ---
+if ! groups $USER | grep -q libvirt; then
+  sudo usermod -aG libvirt $USER
+  warn "User added to 'libvirt' group. Run 'newgrp libvirt' to refresh session."
+fi
+ok "libvirt setup verified"
+
 
 # --- Swap setup ---
 header "Configuring Swap"
