@@ -11,7 +11,7 @@ warn(){ echo -e "${YELLOW}⚠ $1${NC}"; }
 err(){ echo -e "${RED}✗ $1${NC}"; exit 1; }
 header(){ echo -e "\n${GREEN}=== $1 ===${NC}"; }
 
-CPU_LIMIT_PERCENT=85      # target 85 % dari total host
+CPU_LIMIT_PERCENT=85
 RAM_LIMIT_PERCENT=85
 RESTART_DELAY=10
 QEMU_PATH="/var/lib/libvirt/qemu"
