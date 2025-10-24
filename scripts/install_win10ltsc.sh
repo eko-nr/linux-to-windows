@@ -4,6 +4,7 @@
 # Full automation with reboot handling (FIXED windowsPE parsing)
 # ============================================================
 
+VM_NAME=${1:-win10ltsc}
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PORT_FORWARD_SCRIPT="$SCRIPT_DIR/enable_port_forward_rdp.sh"
 AUTO_RESTART_SCRIPT="$SCRIPT_DIR/auto_restart.sh"
@@ -84,7 +85,6 @@ WIN_COMPUTERNAME=${WIN_COMPUTERNAME:-WIN10-VM}
 
 # --- VM Config ---
 header "VM Configuration"
-read -p "VM name [win10ltsc]: " VM_NAME; VM_NAME=${VM_NAME:-win10ltsc}
 
 read -p "RAM allocation (% of ${TOTAL_RAM_MB}MB) [50]: " RAM_PERCENT
 RAM_PERCENT=${RAM_PERCENT:-50}
