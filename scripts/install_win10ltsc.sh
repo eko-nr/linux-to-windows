@@ -742,9 +742,6 @@ while (( CHECK_COUNT < MAX_CHECKS )); do
   sleep 10
 done
 
-# --- Auto Port Forwarding for RDP ---
-header "Auto Configuring RDP Port Forwarding"
-
 # Wait for VM to fully boot and get IP
 echo "⏳ Waiting for VM network initialization..."
 echo "   (This may take 30-60 seconds for Windows to boot and get IP address)"
