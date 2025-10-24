@@ -746,29 +746,39 @@ done
 echo "⏳ Waiting for VM network initialization..."
 echo "   (This may take 30-60 seconds for Windows to boot and get IP address)"
 
-# Smart wait: check if VMs are getting IPs
 MAX_WAIT=60
 for i in $(seq 1 $MAX_WAIT); do
-  VM_COUNT=$(virsh list --name | grep -v '^$' | wc -l)
-  if [[ $VM_COUNT -gt 0 ]]; then
-    # Check if any VM has IP
-    HAS_IP=$(virsh list --name | while read vm; do
-      [[ -n "$vm" ]] && virsh domifaddr "$vm" 2>/dev/null | grep -q ipv4 && echo "yes" && break
-    done)
-    
-    if [[ "$HAS_IP" == "yes" ]]; then
-      echo "✓ VM IP detected after ${i} seconds"
-      sleep 5  # Extra buffer
-      break
-    fi
+  if ! sudo virsh dominfo "${VM_NAME}" &>/dev/null; then
+    echo "⚠️ VM ${VM_NAME} not found, breaking..."
+    break
   fi
-  
-  # Progress indicator
-  if [[ $((i % 10)) -eq 0 ]]; then
+
+  VM_COUNT=$(sudo virsh list --name | grep -v '^$' | wc -l)
+  if (( VM_COUNT == 0 )); then
+    echo "⚠️ No running VMs detected, trying to start ${VM_NAME}..."
+    sudo virsh start "${VM_NAME}" >/dev/null 2>&1 || true
+    sleep 5
+    continue
+  fi
+
+  HAS_IP=$(sudo virsh list --name | while read vm; do
+    [[ -n "$vm" ]] && sudo virsh domifaddr "$vm" 2>/dev/null | grep -q ipv4 && echo "yes" && break
+  done)
+
+  if [[ "$HAS_IP" == "yes" ]]; then
+    echo "✓ VM IP detected after ${i} seconds"
+    sleep 5
+    break
+  fi
+
+  if (( i % 10 == 0 )); then
     echo "   ... still waiting (${i}s / ${MAX_WAIT}s)"
   fi
+
+  echo -n "."
   sleep 1
 done
+echo ""
 
 echo ""
 if [[ "$INSTALL_COMPLETE" == "true" ]]; then
