@@ -600,7 +600,6 @@ sudo virt-install \
   --clock hypervclock_present=yes \
   --tpm backend.type=emulator,model=tpm-crb \
   --rng device=/dev/urandom \
-  --memorybacking access.mode=shared \
   --noautoconsole
 ok "VM created: ${VM_NAME}"
 
