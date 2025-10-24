@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# Hybrid Libvirt + Systemd Auto-Restart + CPU/RAM Limit (Global)
+# 🧩 Hybrid Libvirt Manager + Auto-Restart + CPU/RAM Limit 85%
 # ============================================================
 
 set -euo pipefail
@@ -11,13 +11,42 @@ err() { echo -e "${RED}✗ $1${NC}"; exit 1; }
 header() { echo -e "\n${GREEN}=== $1 ===${NC}"; }
 
 # ============================================================
-# ⚙️  User Configurable Parameters
+# ⚙️ Global Configuration
 # ============================================================
-GLOBAL_LIMIT_CPU_PERCENT=85    # total CPU usage cap (all VMs combined)
-GLOBAL_LIMIT_RAM_PERCENT=85    # total RAM usage cap (all VMs combined)
-RESTART_DELAY=10               # seconds between restart attempts
-# ============================================================
+GLOBAL_LIMIT_CPU_PERCENT=85
+GLOBAL_LIMIT_RAM_PERCENT=85
+RESTART_DELAY=10
 
+# ============================================================
+# 🧰 Section 1: Dependencies
+# ============================================================
+header "Checking dependencies"
+if ! command -v bc >/dev/null 2>&1; then
+  ok "Installing missing dependency: bc"
+  sudo apt-get update -y >/dev/null 2>&1
+  sudo apt-get install -y bc >/dev/null 2>&1
+fi
+ok "All dependencies available"
+
+# ============================================================
+# 🧠 Section 2: Host Memory Optimization
+# ============================================================
+header "Applying host memory tuning"
+SYSCTL_FILE="/etc/sysctl.d/99-memory-tuning.conf"
+
+sudo tee "$SYSCTL_FILE" >/dev/null <<'EOF'
+vm.swappiness=60
+vm.vfs_cache_pressure=50
+vm.dirty_ratio=15
+vm.dirty_background_ratio=5
+EOF
+
+sudo sysctl --system >/dev/null
+ok "Memory tuning applied (swappiness=60, cache_pressure=50, dirty_ratio=15/5)"
+
+# ============================================================
+# 🧩 Section 3: Ensure libvirt is active
+# ============================================================
 header "Checking libvirt service"
 if ! systemctl list-unit-files | grep -q libvirtd; then
   err "libvirtd service not found. Please install libvirt first."
@@ -30,30 +59,7 @@ fi
 ok "libvirtd is active"
 
 # ============================================================
-# 🧠 Host Memory Tuning (Safe Optimization)
-# ============================================================
-header "Applying host memory tuning"
-SYSCTL_FILE="/etc/sysctl.d/99-memory-tuning.conf"
-
-if [[ -f "$SYSCTL_FILE" ]]; then
-  warn "Existing $SYSCTL_FILE found — updating values only..."
-  sudo sed -i '/vm.swappiness/d;/vm.vfs_cache_pressure/d;/vm.dirty_ratio/d;/vm.dirty_background_ratio/d' "$SYSCTL_FILE"
-else
-  ok "Creating new sysctl tuning config"
-fi
-
-sudo tee -a "$SYSCTL_FILE" >/dev/null <<'EOF'
-vm.swappiness=60
-vm.vfs_cache_pressure=50
-vm.dirty_ratio=15
-vm.dirty_background_ratio=5
-EOF
-
-sudo sysctl --system >/dev/null
-ok "Host memory tuning applied (swappiness=60, cache_pressure=50, dirty_ratio=15/5)"
-
-# ============================================================
-# 🧩 Create systemd autorestart unit
+# ⚙️ Section 4: Create systemd autorestart unit
 # ============================================================
 UNIT_FILE="/etc/systemd/system/libvirt-vm@.service"
 if [[ ! -f "$UNIT_FILE" ]]; then
@@ -82,28 +88,24 @@ else
 fi
 
 # ============================================================
-# 🔍 Detect active VMs
+# 🔍 Section 5: Detect VMs
 # ============================================================
-header "Detecting all libvirt VMs"
+header "Detecting libvirt VMs"
 VM_LIST=$(virsh list --all --name | grep -v '^$' || true)
 if [[ -z "$VM_LIST" ]]; then
-  warn "No VMs found."
+  warn "No VMs found. Nothing to configure."
   exit 0
 fi
 VM_COUNT=$(echo "$VM_LIST" | wc -l)
 ok "Detected $VM_COUNT VM(s): $(echo $VM_LIST | tr '\n' ' ')"
 
 # ============================================================
-# ⚙️ Calculate CPU & RAM limits
+# ⚙️ Section 6: Calculate Limits
 # ============================================================
 TOTAL_CPUS=$(nproc)
 TOTAL_RAM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
-
-# CPU limit: total CPU quota available for all VMs
 TOTAL_CPU_QUOTA=$(( TOTAL_CPUS * GLOBAL_LIMIT_CPU_PERCENT * 1000 ))
 CPU_LIMIT_PER_VM=$(( TOTAL_CPU_QUOTA / VM_COUNT / 1000 ))
-
-# RAM limit: total memory cap available for all VMs
 TOTAL_RAM_LIMIT_KB=$(( TOTAL_RAM_KB * GLOBAL_LIMIT_RAM_PERCENT / 100 ))
 RAM_LIMIT_PER_VM_KB=$(( TOTAL_RAM_LIMIT_KB / VM_COUNT ))
 RAM_LIMIT_PER_VM_MB=$(( RAM_LIMIT_PER_VM_KB / 1024 ))
@@ -119,19 +121,17 @@ echo "🚀 CPU per VM limit : ~${CPU_LIMIT_PER_VM}% effective"
 echo "💡 RAM per VM limit : ~${RAM_LIMIT_PER_VM_GB} GB"
 
 # ============================================================
-# 🚀 Apply per-VM limits & restart protection
+# 🚀 Section 7: Apply per-VM limits
 # ============================================================
 header "Applying limits + autorestart"
 
 for VM in $VM_LIST; do
   echo -e "\n🖥️ Configuring VM: ${VM}"
 
-  # Enable VM autostart on host boot
   sudo virsh set-autostart "$VM" >/dev/null 2>&1 || warn "Failed to set autostart for $VM"
-  # Enable systemd restart watchdog
   sudo systemctl enable --now "libvirt-vm@${VM}.service" >/dev/null 2>&1 || warn "Failed to enable systemd unit for $VM"
 
-  # --- Apply CPU limit ---
+  # Apply CPU limit
   if sudo virsh schedinfo "$VM" \
     --set cpu_period=100000 \
     --set cpu_quota=$(( CPU_LIMIT_PER_VM * 1000 )) >/dev/null 2>&1; then
@@ -140,7 +140,7 @@ for VM in $VM_LIST; do
     warn "Failed to set CPU limit for ${VM}"
   fi
 
-  # --- Apply RAM limit ---
+  # Apply RAM limit
   MEM_MAX=$(sudo virsh dominfo "$VM" | awk '/Max memory/ {print $3}')
   if [[ -n "$MEM_MAX" && "$MEM_MAX" -gt 0 ]]; then
     MEM_LIMIT=$(( RAM_LIMIT_PER_VM_KB < MEM_MAX ? RAM_LIMIT_PER_VM_KB : MEM_MAX ))
@@ -155,7 +155,7 @@ for VM in $VM_LIST; do
 done
 
 # ============================================================
-# ✅ Summary
+# ✅ Section 8: Summary
 # ============================================================
 header "✅ Configuration Complete"
 echo "🔁 All VMs auto-start on host boot"
@@ -166,4 +166,4 @@ echo "📊 Current per-VM limit:"
 echo "   - CPU: ~${CPU_LIMIT_PER_VM}%"
 echo "   - RAM: ~${RAM_LIMIT_PER_VM_GB} GB"
 echo ""
-ok "Host tuning active and limits applied successfully!"
+ok "All done! Host tuning and VM limits active successfully!"
