@@ -586,7 +586,7 @@ sudo virt-install \
   --vcpus "${VCPU_COUNT}",maxvcpus="${VCPU_COUNT}",sockets=1,cores="${VCPU_COUNT}",threads=1 \
   --cpu host-passthrough,cache.mode=passthrough \
   --cdrom "${ISO_LINK}" \
-  --disk path="/var/lib/libvirt/images/${VM_NAME}.img",size="${DISK_SIZE}",bus=scsi,discard=unmap,detect_zeroes=unmap,cache=none,io=threads \
+  --disk path="/var/lib/libvirt/images/${VM_NAME}.img",size="${DISK_SIZE}",bus=scsi,discard=unmap,detect_zeroes=unmap,cache=writeback,io=threads \
   --controller type=scsi,model=virtio-scsi \
   --controller type=virtio-serial \
   --os-variant win10 \
@@ -833,7 +833,7 @@ ok "Setup complete! VM is ready to use."
 # Configure auto restart
 if [[ -f "$AUTO_RESTART_SCRIPT" ]]; then
   echo ""
-  echo "🚀 Configuring RDP port forwarding..."
+  echo "🚀 Configuring VM auto-restart..."
   sudo bash "$AUTO_RESTART_SCRIPT"
 else
   echo "No auto restart when vm stopped"
