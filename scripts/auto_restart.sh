@@ -1,6 +1,5 @@
 #!/bin/bash
 # ============================================================
-# 🧩 Libvirt Host Manager v5
 # CPU usage limit by percentage (cgroup v2) + RAM limit + autostart
 # For Debian 12 / Ubuntu 22+
 # ============================================================
