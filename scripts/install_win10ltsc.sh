@@ -684,6 +684,7 @@ fi
 header "Starting Windows Installation"
 sudo virsh start "${VM_NAME}"
 ok "VM started - Windows installation beginning..."
+sleep 15
 
 header "Monitoring Installation Progress"
 echo -e "${BLUE}This will take 10-20 minutes depending on your system${NC}"
@@ -742,6 +743,7 @@ while (( CHECK_COUNT < MAX_CHECKS )); do
   sleep 10
 done
 
+sleep 15
 # Wait for VM to fully boot and get IP
 echo "⏳ Waiting for VM network initialization..."
 echo "   (This may take 30-60 seconds for Windows to boot and get IP address)"
