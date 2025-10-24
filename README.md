@@ -33,15 +33,23 @@ bash install.sh
 
 ## 📦 Script List
 
+### Main Scripts
 | Script | Function |
 |--------|----------|
 | `install.sh` | Main script for Windows 10 LTSC VM installation |
+
+### Scripts Directory (`scripts/`)
+| Script | Function |
+|--------|----------|
+| `auto_restart.sh` | Auto-restart VM utility |
+| `create_swap.sh` | Create swap file utility |
 | `enable_port_forward_rdp.sh` | Enable port forwarding for RDP connections |
-| `start_vm.sh` | Start/run the VM |
-| `stop_vm.sh` | Stop/shutdown the VM |
-| `uninstall_vm.sh` | Uninstall/remove VM and its data |
-| `partition.sh` | Disk partitioning utility |
+| `install_win10ltsc.sh` | Windows 10 LTSC installation script |
 | `limit.sh` | Resource limiting utility |
+| `partition.sh` | Disk partitioning utility |
+| `start_all_vm.sh` | Start all VMs at once |
+| `stop_all_vm.sh` | Stop all VMs at once |
+| `uninstall_win10ltsc.sh` | Uninstall/remove VM and its data |
 
 ## ⚙️ VM Configuration
 
@@ -79,7 +87,7 @@ To enable RDP access:
    - **Disable Windows Firewall** (required to accept RDP connections)
 3. **On the host machine, run:**
    ```bash
-   bash enable_port_forward_rdp.sh
+   bash scripts/enable_port_forward_rdp.sh
    ```
 4. **Connect via RDP:**
    ```
@@ -88,23 +96,29 @@ To enable RDP access:
 
 ## 🔧 VM Management
 
-### Start VM
+### Start Single VM
 ```bash
-bash start_vm.sh
-# or
 sudo virsh start win10ltsc
 ```
 
-### Stop VM
+### Stop Single VM
 ```bash
-bash stop_vm.sh
-# or
 sudo virsh shutdown win10ltsc
 ```
 
 ### Force Stop VM
 ```bash
 sudo virsh destroy win10ltsc
+```
+
+### Start All VMs
+```bash
+bash scripts/start_all_vm.sh
+```
+
+### Stop All VMs
+```bash
+bash scripts/stop_all_vm.sh
 ```
 
 ### Check VM Status
@@ -114,12 +128,38 @@ sudo virsh list --all
 
 ### Uninstall VM
 ```bash
-bash uninstall_vm.sh
+bash scripts/uninstall_win10ltsc.sh
 # or
 sudo virsh undefine win10ltsc --remove-all-storage
 ```
 
-## 📁 Important Directories
+### Auto-Restart VM
+```bash
+bash scripts/auto_restart.sh
+```
+
+## 📁 Directory Structure
+
+```
+linux-to-windows/
+├── FRP/                    # FRP configuration files
+├── rathole/                # Rathole configuration files
+├── scripts/                # All utility scripts
+│   ├── auto_restart.sh
+│   ├── create_swap.sh
+│   ├── enable_port_forward_rdp.sh
+│   ├── install_win10ltsc.sh
+│   ├── limit.sh
+│   ├── partition.sh
+│   ├── start_all_vm.sh
+│   ├── stop_all_vm.sh
+│   └── uninstall_win10ltsc.sh
+├── windows/                # Windows-specific files
+├── install.sh              # Main installer
+└── README.md               # This file
+```
+
+## 📂 Important System Directories
 
 | Path | Description |
 |------|-------------|
@@ -169,7 +209,7 @@ sudo ufw allow 5901/tcp
 ### RDP not working
 - Ensure Remote Desktop is enabled in Windows
 - Ensure Windows Firewall is disabled
-- Run `bash enable_port_forward_rdp.sh`
+- Run `bash scripts/enable_port_forward_rdp.sh`
 - Check if port 3389 is allowed in host firewall
 
 ## 📝 Notes
@@ -178,6 +218,7 @@ sudo ufw allow 5901/tcp
 - ISO file is cached in `/opt/vm-isos/` for future use
 - The installer builds libvirt 11.8.0 from source if not already installed
 - Default network is NAT (requires port forwarding for external access)
+- All utility scripts are organized in the `scripts/` directory
 
 ## ⚠️ Security Warnings
 
