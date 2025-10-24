@@ -6,6 +6,7 @@
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PORT_FORWARD_SCRIPT="$SCRIPT_DIR/enable_port_forward_rdp.sh"
+AUTO_RESTART_SCRIPT="$SCRIPT_DIR/auto_restart.sh"
 
 set -euo pipefail
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
@@ -772,16 +773,6 @@ for i in $(seq 1 $MAX_WAIT); do
   sleep 1
 done
 
-# Check if script exists
-if [[ -f "$PORT_FORWARD_SCRIPT" ]]; then
-  echo ""
-  echo "🚀 Configuring RDP port forwarding..."
-  sudo bash "$PORT_FORWARD_SCRIPT"
-else
-  warn "enable_port_forward_rdp.sh not found in $SCRIPT_DIR. Skipping auto-configuration."
-  echo "Download and run manually when VM is ready."
-fi
-
 echo ""
 if [[ "$INSTALL_COMPLETE" == "true" ]]; then
   header "Installation Complete!"
@@ -814,19 +805,6 @@ else
 fi
 
 echo ""
-echo -e "${GREEN}╔════════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║                    VM MANAGEMENT COMMANDS                      ║${NC}"
-echo -e "${GREEN}╚════════════════════════════════════════════════════════════════╝${NC}"
-echo ""
-echo "  sudo virsh list --all                    # List all VMs"
-echo "  sudo virsh start ${VM_NAME}              # Start VM"
-echo "  sudo virsh shutdown ${VM_NAME}           # Graceful shutdown"
-echo "  sudo virsh destroy ${VM_NAME}            # Force stop"
-echo "  sudo virsh reboot ${VM_NAME}             # Reboot VM"
-echo "  sudo virsh domifaddr ${VM_NAME}          # Check VM IP"
-echo "  sudo virsh console ${VM_NAME}            # Serial console"
-echo "  sudo virsh undefine ${VM_NAME} --remove-all-storage  # Delete VM"
-echo ""
 echo -e "${BLUE}Resource Allocation:${NC}"
 echo "  RAM: ${RAM_SIZE} MB (${RAM_PERCENT}% of ${TOTAL_RAM_MB} MB)"
 echo "  vCPUs: ${VCPU_COUNT} of ${TOTAL_CPUS}"
@@ -851,3 +829,22 @@ echo "  VirtIO Drivers: ${VIRTIO_FILE}"
 echo "  Autounattend Floppy: ${FLOPPY_IMG}"
 echo ""
 ok "Setup complete! VM is ready to use."
+
+# Configure auto restart
+if [[ -f "$AUTO_RESTART_SCRIPT" ]]; then
+  echo ""
+  echo "🚀 Configuring RDP port forwarding..."
+  sudo bash "$AUTO_RESTART_SCRIPT"
+else
+  echo "No auto restart when vm stopped"
+fi
+
+# Configure port forward
+if [[ -f "$PORT_FORWARD_SCRIPT" ]]; then
+  echo ""
+  echo "🚀 Configuring RDP port forwarding..."
+  sudo bash "$PORT_FORWARD_SCRIPT"
+else
+  warn "enable_port_forward_rdp.sh not found in $SCRIPT_DIR. Skipping auto-configuration."
+  echo "Download and run manually when VM is ready."
+fi
