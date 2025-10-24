@@ -30,6 +30,29 @@ fi
 ok "libvirtd is active"
 
 # ============================================================
+# 🧠 Host Memory Tuning (Safe Optimization)
+# ============================================================
+header "Applying host memory tuning"
+SYSCTL_FILE="/etc/sysctl.d/99-memory-tuning.conf"
+
+if [[ -f "$SYSCTL_FILE" ]]; then
+  warn "Existing $SYSCTL_FILE found — updating values only..."
+  sudo sed -i '/vm.swappiness/d;/vm.vfs_cache_pressure/d;/vm.dirty_ratio/d;/vm.dirty_background_ratio/d' "$SYSCTL_FILE"
+else
+  ok "Creating new sysctl tuning config"
+fi
+
+sudo tee -a "$SYSCTL_FILE" >/dev/null <<'EOF'
+vm.swappiness=60
+vm.vfs_cache_pressure=50
+vm.dirty_ratio=15
+vm.dirty_background_ratio=5
+EOF
+
+sudo sysctl --system >/dev/null
+ok "Host memory tuning applied (swappiness=60, cache_pressure=50, dirty_ratio=15/5)"
+
+# ============================================================
 # 🧩 Create systemd autorestart unit
 # ============================================================
 UNIT_FILE="/etc/systemd/system/libvirt-vm@.service"
@@ -128,7 +151,7 @@ for VM in $VM_LIST; do
     warn "Could not detect memory size for ${VM}"
   fi
 
-  ok "limit + restart applied for ${VM}"
+  ok "Limit + restart applied for ${VM}"
 done
 
 # ============================================================
@@ -142,3 +165,5 @@ echo "💾 RAM limited globally to ${GLOBAL_LIMIT_RAM_PERCENT}% of host"
 echo "📊 Current per-VM limit:"
 echo "   - CPU: ~${CPU_LIMIT_PER_VM}%"
 echo "   - RAM: ~${RAM_LIMIT_PER_VM_GB} GB"
+echo ""
+ok "Host tuning active and limits applied successfully!"
