@@ -1,7 +1,6 @@
 #!/bin/bash
 # ============================================================
-# CPU usage limit by percentage (cgroup v2) + RAM limit + autostart
-# For Debian 12 / Ubuntu 22+
+# CPU/RAM Limiter + Autorestart
 # ============================================================
 
 set -euo pipefail
@@ -13,139 +12,254 @@ header(){ echo -e "\n${GREEN}=== $1 ===${NC}"; }
 
 CPU_LIMIT_PERCENT=85
 RAM_LIMIT_PERCENT=85
-RESTART_DELAY=10
-QEMU_PATH="/var/lib/libvirt/qemu"
+MONITOR_INTERVAL=30
 
 # ============================================================
-header "Checking dependencies"
-sudo apt-get update -y >/dev/null 2>&1
-sudo apt-get install -y bc >/dev/null 2>&1
-ok "All dependencies available"
+header "0. Checking cgroup v2"
+
+CGROUP_TYPE=$(stat -fc %T /sys/fs/cgroup/ 2>/dev/null || echo "unknown")
+
+if [[ "$CGROUP_TYPE" != "cgroup2fs" ]]; then
+  warn "Cgroup v2 not detected! Enabling now..."
+  
+  # Backup grub
+  cp /etc/default/grub /etc/default/grub.backup
+  
+  # Check if already has the parameter
+  if grep -q "systemd.unified_cgroup_hierarchy=1" /etc/default/grub; then
+    ok "Cgroup v2 parameter already in grub"
+  else
+    # Add cgroup v2 parameter
+    sed -i 's/GRUB_CMDLINE_LINUX="\(.*\)"/GRUB_CMDLINE_LINUX="\1 systemd.unified_cgroup_hierarchy=1"/' /etc/default/grub
+    ok "Added cgroup v2 to grub config"
+  fi
+  
+  # Update grub
+  if command -v update-grub >/dev/null 2>&1; then
+    update-grub
+  elif command -v grub2-mkconfig >/dev/null 2>&1; then
+    grub2-mkconfig -o /boot/grub2/grub.cfg
+  else
+    err "Cannot find grub update command"
+  fi
+  
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "⚠️  REBOOT REQUIRED to enable cgroup v2"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo ""
+  echo "Run this script again after reboot:"
+  echo "  bash $0"
+  echo ""
+  read -p "Reboot now? [y/N] " -n 1 -r
+  echo
+  if [[ $REPLY =~ ^[Yy]$ ]]; then
+    reboot
+  else
+    exit 0
+  fi
+else
+  ok "Cgroup v2 is active (cgroup2fs)"
+fi
 
 # ============================================================
-header "Applying host memory tuning"
-sudo tee /etc/sysctl.d/99-memory-tuning.conf >/dev/null <<EOF
-vm.swappiness=60
-vm.vfs_cache_pressure=50
-vm.dirty_ratio=15
-vm.dirty_background_ratio=5
-EOF
-sudo sysctl --system >/dev/null
-ok "Memory tuning applied"
+header "1. Checking prerequisites"
+[[ $(id -u) -ne 0 ]] && err "Must run as root"
+command -v bc >/dev/null || apt-get update && apt-get install -y bc
+systemctl is-active --quiet libvirtd || systemctl enable --now libvirtd
+ok "System ready"
 
 # ============================================================
-header "Checking libvirt service"
-systemctl is-active --quiet libvirtd || sudo systemctl enable --now libvirtd
-ok "libvirtd is active"
+header "2. Detecting VMs"
+VM_LIST=$(virsh list --all --name | grep -v '^$' || true)
+[[ -z "$VM_LIST" ]] && err "No VMs found"
+VM_COUNT=$(echo "$VM_LIST" | wc -l)
+ok "Found ${VM_COUNT} VM(s): $(echo $VM_LIST | tr '\n' ' ')"
 
 # ============================================================
-header "Detecting VMs"
-VM_LIST=$(sudo virsh list --all --name | grep -v '^$' || true)
-[[ -z "$VM_LIST" ]] && { warn "No VMs found."; exit 0; }
-ok "Detected $(echo "$VM_LIST" | wc -l) VM(s): $(echo $VM_LIST | tr '\n' ' ')"
-
-# ============================================================
-header "Host resources"
+header "3. Calculating resources"
 CPU_COUNT=$(nproc)
 RAM_TOTAL_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
 RAM_TOTAL_MB=$((RAM_TOTAL_KB/1024))
 RAM_LIMIT_MB=$((RAM_TOTAL_MB*RAM_LIMIT_PERCENT/100))
-RAM_LIMIT_PER_VM_MB=$((RAM_LIMIT_MB/$(echo "$VM_LIST" | wc -l)))
-RAM_LIMIT_PER_VM_GB=$((RAM_LIMIT_PER_VM_MB/1024))
-ok "CPU: ${CPU_COUNT} cores | RAM: ${RAM_TOTAL_MB}MB (~${RAM_LIMIT_PER_VM_GB}GB per VM)"
+RAM_LIMIT_PER_VM_MB=$((RAM_LIMIT_MB/VM_COUNT))
+RAM_LIMIT_PER_VM_BYTES=$((RAM_LIMIT_PER_VM_MB * 1024 * 1024))
+
+ok "CPU: ${CPU_COUNT} cores @ ${CPU_LIMIT_PERCENT}% each VM"
+ok "RAM: ${RAM_TOTAL_MB}MB total → ~$((RAM_LIMIT_PER_VM_MB/1024))GB per VM"
 
 # ============================================================
-header "Configuring systemd template"
-UNIT_FILE="/etc/systemd/system/libvirt-vm@.service"
-if [[ ! -f "$UNIT_FILE" ]]; then
-sudo tee "$UNIT_FILE" >/dev/null <<EOF
+header "4. Creating systemd services for each VM"
+
+for VM in $VM_LIST; do
+  echo -e "\n🖥️  Configuring: $VM"
+  
+  # 4a. Make VM persistent
+  if ! virsh dominfo "$VM" 2>/dev/null | grep -q "Persistent:.*yes"; then
+    virsh dumpxml "$VM" > "/tmp/${VM}.xml"
+    virsh define "/tmp/${VM}.xml" && rm "/tmp/${VM}.xml"
+    ok "Made persistent"
+  fi
+
+  # 4b. Enable libvirt autostart
+  virsh autostart "$VM" 2>/dev/null || warn "Autostart command failed (may already be set)"
+  
+  # 4c. Create systemd service for this VM
+  SERVICE_FILE="/etc/systemd/system/libvirt-vm-${VM}.service"
+  cat > "$SERVICE_FILE" <<EOF
 [Unit]
-Description=Auto-start libvirt VM %i
-After=libvirtd.service
+Description=Libvirt VM: ${VM}
+After=libvirtd.service network.target
 Requires=libvirtd.service
+PartOf=libvirtd.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/virsh start %i
-ExecStop=/usr/bin/virsh shutdown %i
 RemainAfterExit=yes
-Restart=always
-RestartSec=${RESTART_DELAY}
+ExecStart=/usr/bin/virsh start ${VM}
+ExecStop=/usr/bin/virsh shutdown ${VM}
+Restart=on-failure
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
 EOF
-fi
-sudo systemctl daemon-reload
-ok "Template ready"
+  
+  systemctl daemon-reload
+  systemctl enable "libvirt-vm-${VM}.service"
+  ok "Systemd service created & enabled"
+  
+  # 4d. Update VM XML with CPU limit (persistent)
+  TMP_XML=$(mktemp)
+  virsh dumpxml "$VM" > "$TMP_XML"
+  
+  CPU_QUOTA=$((CPU_LIMIT_PERCENT * 1000 * CPU_COUNT))
+  
+  if grep -q "<cputune>" "$TMP_XML"; then
+    sed -i "s|<quota>.*</quota>|<quota>${CPU_QUOTA}</quota>|" "$TMP_XML"
+    sed -i "s|<period>.*</period>|<period>100000</period>|" "$TMP_XML"
+  else
+    sed -i "/<domain/a\\  <cputune>\\n    <quota>${CPU_QUOTA}</quota>\\n    <period>100000</period>\\n  </cputune>" "$TMP_XML"
+  fi
+  
+  virsh define "$TMP_XML"
+  rm -f "$TMP_XML"
+  ok "CPU limit configured in XML"
+  
+  # 4e. Set RAM limit (persistent)
+  RAM_LIMIT_KB=$((RAM_LIMIT_PER_VM_MB * 1024))
+  virsh setmem "$VM" "${RAM_LIMIT_KB}" --config 2>/dev/null || warn "RAM setmem failed (may need VM restart)"
+  ok "RAM limit set to ~$((RAM_LIMIT_PER_VM_MB/1024))GB"
+  
+  # 4f. Start VM if not running
+  if ! virsh domstate "$VM" 2>/dev/null | grep -q running; then
+    virsh start "$VM" && ok "VM started" || warn "Could not start VM"
+    sleep 3
+  fi
+  
+  # 4g. Apply live cgroup limits (OPTIONAL - can cause temporary freeze)
+  # Uncomment below if you need INSTANT limits without VM restart
+  # WARNING: May cause 2-10 sec UI freeze if VM is under heavy load
+  
+  : <<'COMMENTED_CGROUP_DIRECT'
+  VM_ID=$(virsh domid "$VM" 2>/dev/null || echo "")
+  if [[ -n "$VM_ID" ]]; then
+    # Find cgroup path (handle escaped characters)
+    CGROUP_BASE="/sys/fs/cgroup/machine.slice"
+    CGROUP_PATTERN="machine-qemu*${VM_ID}*${VM}*.scope"
+    CGROUP_PATH=$(find "$CGROUP_BASE" -maxdepth 1 -type d -name "$CGROUP_PATTERN" 2>/dev/null | head -n1)
+    
+    if [[ -n "$CGROUP_PATH" && -d "$CGROUP_PATH" ]]; then
+      # CPU limit (live)
+      echo "${CPU_QUOTA} 100000" > "${CGROUP_PATH}/cpu.max" 2>/dev/null && ok "Live CPU limit applied" || warn "Could not apply live CPU limit"
+      
+      # RAM limit (live)
+      echo "$RAM_LIMIT_PER_VM_BYTES" > "${CGROUP_PATH}/memory.max" 2>/dev/null && ok "Live RAM limit applied" || warn "Could not apply live RAM limit"
+    else
+      warn "Cgroup path not found (VM may need restart for live limits)"
+    fi
+  fi
+COMMENTED_CGROUP_DIRECT
+  
+  warn "Direct cgroup limits disabled (prevents freeze). Restart VM to apply limits."
+done
 
 # ============================================================
-header "Applying CPU(%), RAM limit & autostart"
+header "5. Creating VM monitor script"
 
-for VM in $VM_LIST; do
-  echo -e "\n🖥️  VM: $VM"
-
-  # Persistent ensure
-  if ! sudo virsh dominfo "$VM" | grep -q "Persistent:.*yes"; then
-    sudo virsh dumpxml "$VM" | sudo tee "${QEMU_PATH}/${VM}.xml" >/dev/null
-    sudo virsh define "${QEMU_PATH}/${VM}.xml" >/dev/null 2>&1 && ok "Persistent defined"
-  fi
-
-  # Autostart enable
-  sudo virsh set-autostart "$VM" >/dev/null 2>&1 && ok "Autostart enabled" || warn "Autostart failed (ignore)"
-
-  # rc.local fallback
-  if [[ ! -f /etc/rc.local ]]; then
-    sudo tee /etc/rc.local >/dev/null <<'EORC'
+MONITOR_SCRIPT="/usr/local/bin/vm-monitor.sh"
+cat > "$MONITOR_SCRIPT" <<'EOMONITOR'
 #!/bin/bash
+# VM crash monitor - auto restart VMs
+
+while true; do
+  for VM in $(virsh list --all --name | grep -v '^$'); do
+    # Check if VM should be running (autostart enabled)
+    if virsh dominfo "$VM" 2>/dev/null | grep -q "Autostart:.*enable"; then
+      # Check if VM is actually running
+      if ! virsh domstate "$VM" 2>/dev/null | grep -q running; then
+        echo "[$(date)] VM $VM is down, restarting..." | systemd-cat -t vm-monitor
+        virsh start "$VM" 2>/dev/null
+        sleep 5
+      fi
+    fi
+  done
+  sleep 30
+done
+EOMONITOR
+
+chmod +x "$MONITOR_SCRIPT"
+ok "Monitor script created"
+
+# ============================================================
+header "6. Creating monitor systemd service"
+
+cat > /etc/systemd/system/vm-monitor.service <<EOF
+[Unit]
+Description=VM Crash Monitor & Auto-restart
+After=libvirtd.service
+Requires=libvirtd.service
+
+[Service]
+Type=simple
+ExecStart=${MONITOR_SCRIPT}
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable vm-monitor.service
+systemctl restart vm-monitor.service
+ok "Monitor service started"
+
+# ============================================================
+header "7. Creating rc.local fallback (for host reboot)"
+
+cat > /etc/rc.local <<'EORCLOCAL'
+#!/bin/bash
+# Fallback autostart for VMs on host boot
+sleep 10
 for vm in $(virsh list --all --name | grep -v '^$'); do
-  virsh start "$vm" >/dev/null 2>&1
+  if virsh dominfo "$vm" 2>/dev/null | grep -q "Autostart:.*enable"; then
+    virsh start "$vm" >/dev/null 2>&1
+  fi
 done
 exit 0
-EORC
-    sudo chmod +x /etc/rc.local
-    sudo systemctl enable rc-local >/dev/null 2>&1 || true
-    ok "rc.local autostart fallback created"
-  fi
+EORCLOCAL
 
-  # Start VM if off
-  if ! sudo virsh domstate "$VM" | grep -q running; then
-    sudo virsh start "$VM" >/dev/null 2>&1 && ok "VM started"
-    sleep 5
-  fi
-
-  # ===== CPU LIMIT BY PERCENT (cputune XML) =====
-  QUOTA=$((CPU_LIMIT_PERCENT * 1000))
-  PERIOD=100000
-  TMP_XML=$(mktemp)
-  sudo virsh dumpxml "$VM" > "$TMP_XML"
-  if ! grep -q "<cputune>" "$TMP_XML"; then
-    sudo sed -i "/<cpu>/a\\
-  <cputune>\\
-    <quota>${QUOTA}</quota>\\
-    <period>${PERIOD}</period>\\
-  </cputune>" "$TMP_XML"
-  else
-    sudo sed -i "s|<quota>.*</quota>|<quota>${QUOTA}</quota>|" "$TMP_XML" || true
-  fi
-  sudo virsh define "$TMP_XML" >/dev/null 2>&1
-  rm -f "$TMP_XML"
-  ok "CPU limited to ${CPU_LIMIT_PERCENT}% of total host"
-
-  # ===== RAM limit =====
-  MEM_KB=$((RAM_LIMIT_PER_VM_MB*1024))
-  sudo virsh setmem "$VM" "$MEM_KB" --config >/dev/null 2>&1 && ok "RAM limited to ~${RAM_LIMIT_PER_VM_GB}GB" || warn "RAM setmem failed"
-
-  # systemd service
-  sudo systemctl enable --now libvirt-vm@"$VM".service >/dev/null 2>&1 || true
-done
+chmod +x /etc/rc.local
+systemctl enable rc-local 2>/dev/null || true
+ok "rc.local fallback created"
 
 # ============================================================
-header "✅ Configuration complete"
-echo "🔁 Autostart active via rc.local + systemd"
-echo "⚙️  CPU usage capped globally to ${CPU_LIMIT_PERCENT}%"
-echo "💾 RAM limited globally to ${RAM_LIMIT_PERCENT}%"
-echo "📊 Effective per-VM:"
-echo "   - CPU: ~${CPU_LIMIT_PERCENT}%"
-echo "   - RAM: ~${RAM_LIMIT_PER_VM_GB}GB"
-ok "All done! CPU limit now percentage-based."
+header "✅ CONFIGURATION COMPLETE"
+echo ""
+echo "📊 Summary:"
+echo "   • CPU limit: ${CPU_LIMIT_PERCENT}% per VM (${CPU_COUNT} cores)"
+echo "   • RAM limit: ~$((RAM_LIMIT_PER_VM_MB/1024))GB per VM"
+echo "   • VMs configured: ${VM_COUNT}"
+echo ""
+ok "All done! VMs will auto-restart on crash or host reboot."
