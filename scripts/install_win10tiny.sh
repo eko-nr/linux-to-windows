@@ -256,9 +256,6 @@ cat > "$AUTOUNATTEND_DIR/autounattend.xml" << 'XMLEOF'
         <AcceptEula>true</AcceptEula>
         <FullName>VM User</FullName>
         <Organization>VirtualMachine</Organization>
-        <ProductKey>
-          <WillShowUI>Never</WillShowUI>
-        </ProductKey>
       </UserData>
 
       <DynamicUpdate><Enable>false</Enable></DynamicUpdate>
