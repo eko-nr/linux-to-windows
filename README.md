@@ -31,12 +31,19 @@ cd linux-to-windows
 bash install.sh
 ```
 
-## 📦 Script List
+## 📦 Available Scripts
 
-### Main Scripts
+### Main Installer
 | Script | Function |
 |--------|----------|
 | `install.sh` | Main script for Windows 10 LTSC VM installation |
+
+### VM Management Scripts (Root Directory)
+| Script | Function |
+|--------|----------|
+| `start_all_vm.sh` | Start all VMs at once |
+| `stop_all_vm.sh` | Stop all VMs at once |
+| `uninstall.sh` | Uninstall/remove VM and its data |
 
 ### Scripts Directory (`scripts/`)
 | Script | Function |
@@ -44,12 +51,14 @@ bash install.sh
 | `auto_restart.sh` | Auto-restart VM utility |
 | `create_swap.sh` | Create swap file utility |
 | `enable_port_forward_rdp.sh` | Enable port forwarding for RDP connections |
+| `install_win10atlas.sh` | Windows 10 Atlas installation script |
 | `install_win10ltsc.sh` | Windows 10 LTSC installation script |
+| `install_win10tiny.sh` | Windows 10 Tiny installation script |
 | `limit.sh` | Resource limiting utility |
 | `partition.sh` | Disk partitioning utility |
-| `start_all_vm.sh` | Start all VMs at once |
-| `stop_all_vm.sh` | Stop all VMs at once |
-| `uninstall_win10ltsc.sh` | Uninstall/remove VM and its data |
+| `uninstall_win10atlas.sh` | Uninstall Windows 10 Atlas VM |
+| `uninstall_win10ltsc.sh` | Uninstall Windows 10 LTSC VM |
+| `uninstall_win10tiny.sh` | Uninstall Windows 10 Tiny VM |
 
 ## ⚙️ VM Configuration
 
@@ -113,12 +122,12 @@ sudo virsh destroy win10ltsc
 
 ### Start All VMs
 ```bash
-bash scripts/start_all_vm.sh
+bash start_all_vm.sh
 ```
 
 ### Stop All VMs
 ```bash
-bash scripts/stop_all_vm.sh
+bash stop_all_vm.sh
 ```
 
 ### Check VM Status
@@ -128,8 +137,15 @@ sudo virsh list --all
 
 ### Uninstall VM
 ```bash
+# Using uninstall script
+bash uninstall.sh
+
+# Or using specific uninstall scripts
 bash scripts/uninstall_win10ltsc.sh
-# or
+bash scripts/uninstall_win10atlas.sh
+bash scripts/uninstall_win10tiny.sh
+
+# Or using virsh directly
 sudo virsh undefine win10ltsc --remove-all-storage
 ```
 
@@ -142,21 +158,26 @@ bash scripts/auto_restart.sh
 
 ```
 linux-to-windows/
-├── FRP/                    # FRP configuration files
-├── rathole/                # Rathole configuration files
-├── scripts/                # All utility scripts
-│   ├── auto_restart.sh
-│   ├── create_swap.sh
-│   ├── enable_port_forward_rdp.sh
-│   ├── install_win10ltsc.sh
-│   ├── limit.sh
-│   ├── partition.sh
-│   ├── start_all_vm.sh
-│   ├── stop_all_vm.sh
-│   └── uninstall_win10ltsc.sh
-├── windows/                # Windows-specific files
-├── install.sh              # Main installer
-└── README.md               # This file
+├── FRP/                              # FRP configuration files
+├── rathole/                          # Rathole configuration files
+├── scripts/                          # Utility scripts directory
+│   ├── auto_restart.sh              # Auto-restart VM utility
+│   ├── create_swap.sh               # Create swap file utility
+│   ├── enable_port_forward_rdp.sh   # Enable RDP port forwarding
+│   ├── install_win10atlas.sh        # Windows 10 Atlas installer
+│   ├── install_win10ltsc.sh         # Windows 10 LTSC installer
+│   ├── install_win10tiny.sh         # Windows 10 Tiny installer
+│   ├── limit.sh                     # Resource limiting utility
+│   ├── partition.sh                 # Disk partitioning utility
+│   ├── uninstall_win10atlas.sh      # Uninstall Atlas VM
+│   ├── uninstall_win10ltsc.sh       # Uninstall LTSC VM
+│   └── uninstall_win10tiny.sh       # Uninstall Tiny VM
+├── windows/                          # Windows-specific files
+├── install.sh                        # Main installer script
+├── start_all_vm.sh                   # Start all VMs
+├── stop_all_vm.sh                    # Stop all VMs
+├── uninstall.sh                      # Main uninstall script
+└── README.md                         # This file
 ```
 
 ## 📂 Important System Directories
@@ -214,11 +235,14 @@ sudo ufw allow 5901/tcp
 
 ## 📝 Notes
 
-- The script automatically downloads Windows 10 LTSC ISO from archive.org
-- ISO file is cached in `/opt/vm-isos/` for future use
+- The script supports multiple Windows 10 variants:
+  - **LTSC** (Long-Term Servicing Channel) - Stable enterprise version
+  - **Atlas** - Optimized lightweight version
+  - **Tiny** - Minimal lightweight version
+- ISO files are cached in `/opt/vm-isos/` for future use
 - The installer builds libvirt 11.8.0 from source if not already installed
 - Default network is NAT (requires port forwarding for external access)
-- All utility scripts are organized in the `scripts/` directory
+- Management scripts are available both in root directory and `scripts/` directory
 
 ## ⚠️ Security Warnings
 
