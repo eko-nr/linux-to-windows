@@ -260,7 +260,7 @@ fi
 # --- Ensure Windows ISO ---
 if [[ ! -f "$ISO_FILE" || $(stat -c%s "$ISO_FILE" 2>/dev/null || echo 0) -lt 1000000000 ]]; then
   step "Downloading Windows 10 LTSC ISO..."
-  sudo wget -O "$ISO_FILE" "https://archive.org/download/windows-10-ltsc-enterprise-feb-2019/17763.2028/Windows_10__ENT_LTSC_OEM-June_x64_multilingual%5B17763.2028%5D.iso"
+  sudo wget -O "$ISO_FILE" "https://archive.org/download/windows10_201909/Windows10.iso"
 else
   ok "Using cached ISO: $ISO_FILE"
 fi
