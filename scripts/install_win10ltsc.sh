@@ -373,6 +373,7 @@ cat > "$AUTOUNATTEND_DIR/autounattend.xml" << 'XMLEOF'
         <FullName>VM User</FullName>
         <Organization>VirtualMachine</Organization>
         <ProductKey>
+          <Key>NPPR9-FWDCX-D2C8J-H872K-2YT43</Key>
           <WillShowUI>Never</WillShowUI>
         </ProductKey>
       </UserData>
