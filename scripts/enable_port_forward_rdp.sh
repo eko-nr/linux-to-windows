@@ -9,6 +9,34 @@ PUB_IP=$(ip -4 addr show dev "$PUB_IF" | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | h
 echo "✓ Detected public interface: $PUB_IF ($PUB_IP)"
 echo
 
+# 🔹 Ask user for base port
+echo "🔧 Configure public RDP base port mapping"
+echo "   Recommended range: 49152–65535 (to avoid port scanners)"
+read -p "Enter base port for public RDP access [default: 3389]: " BASE_PORT
+BASE_PORT=${BASE_PORT:-3389}
+
+# Validate numeric input
+if ! [[ "$BASE_PORT" =~ ^[0-9]+$ ]]; then
+  echo "❌ Invalid port number. Must be numeric (49152–65535 or 3389)."
+  exit 1
+fi
+
+# Warn if using default port 3389
+if [[ "$BASE_PORT" -eq 3389 ]]; then
+  echo "⚠️  WARNING: Using default RDP port (3389) makes your host easily discoverable by bots and scanners."
+  echo "   It’s strongly recommended to use a higher custom port (e.g., 55000 or 60000)."
+  echo
+fi
+
+# Check port range
+if (( BASE_PORT < 1024 )); then
+  echo "❌ Port must be >= 1024."
+  exit 1
+fi
+
+echo "✓ Using base public port: $BASE_PORT"
+echo
+
 # 🔹 Detect active VMs and their internal IPs
 echo "🔍 Scanning for active VMs..."
 VM_LIST=$(virsh list --name 2>/dev/null || true)
@@ -38,7 +66,6 @@ fi
 
 # 🔹 Write nftables configuration
 CONF=/etc/nftables.conf
-BASE_PORT=3389
 COUNT=0
 
 {
@@ -97,7 +124,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "RDP CONNECTION DETAILS:"
 COUNT=0
 while read -r VM IP; do
-  PORT=$((3389 + COUNT))
+  PORT=$((BASE_PORT + COUNT))
   echo "  VM: $VM"
   echo "  →  Connect via RDP: $PUB_IP:$PORT"
   echo "  →  Forwards to: $IP:3389"
