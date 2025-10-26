@@ -18,17 +18,6 @@ echo -e "${YELLOW}→ Removing VM definition & disk...${NC}"
 sudo virsh undefine "$VM_NAME" --remove-all-storage 2>/dev/null || true
 sudo rm -f "/var/lib/libvirt/images/${VM_NAME}.img" 2>/dev/null
 
-# Ask to delete ISO cache
-if [[ -f "$ISO_FILE" ]]; then
-    read -p "Delete cached ISO (${ISO_FILE})? (y/n): " ANS
-    if [[ $ANS =~ ^[Yy]$ ]]; then
-        sudo rm -f "$ISO_FILE"
-        echo -e "${GREEN}✓ ISO deleted${NC}"
-    else
-        echo -e "${YELLOW}→ ISO kept at ${ISO_FILE}${NC}"
-    fi
-fi
-
 # Ask to remove swap
 if grep -q '/swapfile' /etc/fstab; then
     read -p "Remove /swapfile (created by installer)? (y/n): " SWP

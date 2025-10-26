@@ -125,6 +125,7 @@ sudo apt install -y \
  libgnutls28-dev gnutls-bin libxml2-utils xorriso \
  dosfstools libguestfs-tools swtpm swtpm-tools nftables
 
+
 # --- libvirt check ---
 header "Checking libvirt/virsh"
 SKIP_BUILD=false
@@ -151,28 +152,138 @@ header "Ensuring libvirt consistency"
 sudo systemctl stop libvirtd virtqemud 2>/dev/null || true
 sudo ldconfig
 
-# --- ISO Cache ---
+# Detect mismatched installs
+if [[ -f /usr/bin/virsh && -f /usr/lib/x86_64-linux-gnu/libvirt.so.0 ]]; then
+  if ! strings /usr/lib/x86_64-linux-gnu/libvirt.so.0 | grep -q 'LIBVIRT_11'; then
+    warn "Old libvirt library detected — cleaning up"
+    sudo apt remove --purge -y libvirt-daemon-system libvirt-daemon libvirt-clients || true
+    sudo rm -rf /usr/lib/x86_64-linux-gnu/libvirt* /usr/lib/libvirt* /usr/local/lib/libvirt* || true
+  fi
+fi
+
+# --- Build or fallback ---
+if [[ "$SKIP_BUILD" == false ]]; then
+  header "Building libvirt 11.8.0"
+  cd /usr/src; sudo rm -rf libvirt
+  if ! sudo git clone --branch v11.8.0 --depth 1 https://github.com/libvirt/libvirt.git; then
+    warn "Could not fetch v11.8.0, falling back to latest stable from apt"
+    sudo apt update -y && sudo apt install -y libvirt-daemon-system libvirt-clients
+    SKIP_BUILD=true
+  else
+    cd libvirt
+    sudo meson setup build --prefix=/usr --libdir=/usr/lib -Dsystem=true
+    sudo ninja -C build && sudo ninja -C build install
+  fi
+fi
+
+# --- Post-install sanity check ---
+header "Validating libvirt installation"
+sudo ldconfig
+sudo systemctl daemon-reexec
+sudo systemctl daemon-reload
+sudo systemctl enable --now libvirtd virtqemud || true
+sleep 2
+
+if ! systemctl is-active --quiet libvirtd; then
+  warn "libvirtd failed to start, attempting recovery..."
+  if [[ -d /usr/lib64/libvirt && ! -d /usr/lib/libvirt ]]; then
+    sudo ln -sf /usr/lib64/libvirt /usr/lib/libvirt
+  fi
+  sudo systemctl restart libvirtd || true
+fi
+
+# Final check
+if systemctl is-active --quiet libvirtd && command -v virsh &>/dev/null; then
+  # --- User/group setup for libvirt ---
+  if ! getent group libvirt >/dev/null; then
+    sudo groupadd -r libvirt
+    ok "Group 'libvirt' created"
+  fi
+
+  # Only add user if not root
+  if [[ "$EUID" -ne 0 ]]; then
+    if ! groups $USER | grep -q libvirt; then
+      sudo usermod -aG libvirt $USER
+      warn "User added to 'libvirt' group. Run 'newgrp libvirt' to refresh session."
+    fi
+  else
+    ok "Running as root — skipping usermod step"
+  fi
+
+  ok "libvirt group setup verified"
+
+else
+  warn "⚠ libvirt not fully functional — installing system version as fallback"
+  sudo apt install -y libvirt-daemon-system libvirt-clients
+  sudo systemctl enable --now libvirtd virtqemud
+fi
+
+# --- Swap setup ---
+header "Configuring Swap"
+if [[ ! -f /swapfile ]]; then
+  sudo fallocate -l ${SWAP_SIZE}G /swapfile
+  sudo chmod 600 /swapfile
+  sudo mkswap /swapfile
+  sudo swapon /swapfile
+  echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null
+  ok "Swap ${SWAP_SIZE}G created"
+else ok "Swap already exists"; fi
+
+# --- ISO Cache (Tiny) ---
 header "Preparing Windows ISO"
 ISO_CACHE="/opt/vm-isos"
 ISO_FILE="${ISO_CACHE}/Windows10-Tiny.iso"
 ISO_LINK="/var/lib/libvirt/boot/Windows10-Tiny.iso"
 sudo mkdir -p "$ISO_CACHE" /var/lib/libvirt/boot
 
+# --- Ensure required libvirt system users exist ---
+if ! getent group libvirt-qemu >/dev/null; then
+  sudo groupadd -r libvirt-qemu
+  ok "Group 'libvirt-qemu' created"
+fi
+
+if ! id libvirt-qemu &>/dev/null; then
+  sudo useradd -r -g libvirt-qemu -d /var/lib/libvirt -s /usr/sbin/nologin libvirt-qemu
+  ok "User 'libvirt-qemu' created"
+fi
+
+if ! getent group libvirt-dnsmasq >/dev/null; then
+  sudo groupadd -r libvirt-dnsmasq
+  ok "Group 'libvirt-dnsmasq' created"
+fi
+
+if ! id libvirt-dnsmasq &>/dev/null; then
+  sudo useradd -r -g libvirt-dnsmasq -d /var/lib/libvirt/dnsmasq -s /usr/sbin/nologin libvirt-dnsmasq
+  ok "User 'libvirt-dnsmasq' created"
+fi
+
 # --- Ensure Windows ISO ---
-if [[ ! -f "$ISO_FILE" || $(stat -c%s "$ISO_FILE" 2>/dev/null || echo 0) -lt 1000000000 ]]; then
-  step "Downloading Windows 10 Tiny ISO..."
-  sudo wget -O "$ISO_FILE" "https://archive.org/download/windows-10-tiny-b-4-x-64/Windows%2010%20%28tiny%20b4%29-X64.iso"
+# Download Tiny b4 x64
+if [[ ! -f "$ISO_FILE" || $(stat -c%s "$ISO_FILE" 2>/dev/null || echo 0) -lt 500000000 ]]; then
+  step "Downloading Windows 10 Tiny b4 (x64) ISO..."
+  sudo wget -O "$ISO_FILE" "https://archive.org/download/tiny-10-23-h2/tiny10%20x64%2023h2.iso"
 else
   ok "Using cached ISO: $ISO_FILE"
 fi
+
+sudo cp -f "$ISO_FILE" "$ISO_LINK"
+sudo chmod 644 "$ISO_LINK"
 
 # Always ensure ISO available in libvirt boot path
 if [[ ! -f "$ISO_LINK" ]]; then
   sudo cp -f "$ISO_FILE" "$ISO_LINK"
 fi
+
+# Apply safe permissions
+if id libvirt-qemu &>/dev/null; then
+  sudo chown libvirt-qemu:libvirt-qemu "$ISO_LINK"
+else
+  warn "User 'libvirt-qemu' not found — using root ownership"
+  sudo chown root:root "$ISO_LINK"
+fi
 sudo chmod 644 "$ISO_LINK"
 
-# --- VirtIO Drivers ---
+# --- Download virtio drivers ---
 header "Preparing virtio Drivers"
 VIRTIO_FILE="${ISO_CACHE}/virtio-win.iso"
 VIRTIO_LINK="/var/lib/libvirt/boot/virtio-win.iso"
@@ -188,7 +299,16 @@ fi
 if [[ ! -f "$VIRTIO_LINK" ]]; then
   sudo cp -f "$VIRTIO_FILE" "$VIRTIO_LINK"
 fi
+
+# Apply safe permissions
+if id libvirt-qemu &>/dev/null; then
+  sudo chown libvirt-qemu:libvirt-qemu "$VIRTIO_LINK"
+else
+  warn "User 'libvirt-qemu' not found — using root ownership"
+  sudo chown root:root "$VIRTIO_LINK"
+fi
 sudo chmod 644 "$VIRTIO_LINK"
+
 
 # --- Generate autounattend.xml ---
 header "Generating Unattended Installation File"
@@ -201,6 +321,7 @@ WIN_PASSWORD_ESC=$(echo "$WIN_PASSWORD" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&
 WIN_COMPUTERNAME_ESC=$(echo "$WIN_COMPUTERNAME" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g; s/'"'"'/\&apos;/g')
 
 cat > "$AUTOUNATTEND_DIR/autounattend.xml" << 'XMLEOF'
+
 <?xml version="1.0" encoding="utf-8"?>
 <unattend xmlns="urn:schemas-microsoft-com:unattend">
   <settings pass="windowsPE">
@@ -256,6 +377,9 @@ cat > "$AUTOUNATTEND_DIR/autounattend.xml" << 'XMLEOF'
         <AcceptEula>true</AcceptEula>
         <FullName>VM User</FullName>
         <Organization>VirtualMachine</Organization>
+        <ProductKey>
+          <WillShowUI>Never</WillShowUI>
+        </ProductKey>
       </UserData>
 
       <DynamicUpdate><Enable>false</Enable></DynamicUpdate>
@@ -383,7 +507,6 @@ cat > "$AUTOUNATTEND_DIR/autounattend.xml" << 'XMLEOF'
     </component>
   </settings>
 </unattend>
-
 XMLEOF
 
 # Replace placeholders with escaped values
@@ -407,7 +530,7 @@ FLOPPY_IMG="${ISO_CACHE}/autounattend-${VM_NAME}.img"
 step "Creating floppy image with autounattend.xml..."
 sudo dd if=/dev/zero of="$FLOPPY_IMG" bs=1024 count=1440 status=none 2>&1 || { err "Failed to create floppy image"; cleanup_and_exit; }
 sudo mkfs.vfat -F 12 "$FLOPPY_IMG" 2>&1 | grep -v "warning" || { err "Failed to format floppy"; cleanup_and_exit; }
-FLOPPY_MOUNT="/mnt/floppy-tmp-${VM_NAME}"
+FLOPPY_MOUNT="/tmp/floppy-tmp-${VM_NAME}"
 sudo mkdir -p "$FLOPPY_MOUNT"
 sudo mount -o loop "$FLOPPY_IMG" "$FLOPPY_MOUNT" || { err "Failed to mount floppy"; cleanup_and_exit; }
 sudo cp "$AUTOUNATTEND_DIR/autounattend.xml" "$FLOPPY_MOUNT/autounattend.xml" || { err "Failed to copy autounattend.xml"; sudo umount "$FLOPPY_MOUNT" 2>/dev/null; cleanup_and_exit; }
@@ -698,7 +821,7 @@ echo ""
 echo ""
 if [[ "$INSTALL_COMPLETE" == "true" ]]; then
   header "Installation Complete!"
-  ok "Windows 10 LTSC installed successfully!"
+  ok "Windows 10 Tiny installed successfully!"
   echo ""
   echo -e "${BLUE}VM Details:${NC}"
   echo "  Name: ${VM_NAME}"
