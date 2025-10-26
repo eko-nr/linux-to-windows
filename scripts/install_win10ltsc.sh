@@ -105,6 +105,29 @@ echo "Allocated Disk: ${DISK_SIZE} GB"
 
 read -p "VNC port [5901]: " VNC_PORT; VNC_PORT=${VNC_PORT:-5901}
 
+# RDP port
+echo "🔧 Configure public RDP base port mapping"
+echo "   Recommended range: 49152–65535 (to avoid port scanners)"
+read -p "Enter base port for public RDP access [default: 3389]: " RDP_PORT
+RDP_PORT=${RDP_PORT:-3389}
+
+if ! [[ "$RDP_PORT" =~ ^[0-9]+$ ]]; then
+  echo "❌ Invalid port number. Must be numeric (49152–65535 or 3389)."
+  exit 1
+fi
+
+if (( RDP_PORT < 1024 )); then
+  echo "❌ Port must be >= 1024."
+  exit 1
+fi
+
+if [[ "$RDP_PORT" -eq 3389 ]]; then
+  echo "⚠️  WARNING: Using default RDP port (3389) makes your host easily discoverable by bots and scanners."
+  echo "   It’s strongly recommended to use a higher custom port (e.g., 55000 or 60000)."
+  echo
+fi
+echo "✓ Using base public port: $RDP_PORT"
+
 read -p "Swap size in GB [4]: " SWAP_SIZE
 SWAP_SIZE=${SWAP_SIZE:-4}
 (( SWAP_SIZE < 1 )) && SWAP_SIZE=1
@@ -884,7 +907,7 @@ fi
 if [[ -f "$PORT_FORWARD_SCRIPT" ]]; then
   echo ""
   echo "🚀 Configuring RDP port forwarding..."
-  sudo bash "$PORT_FORWARD_SCRIPT"
+  sudo bash "$PORT_FORWARD_SCRIPT" "$RDP_PORT"
 else
   warn "enable_port_forward_rdp.sh not found in $SCRIPT_DIR. Skipping auto-configuration."
   echo "Download and run manually when VM is ready."

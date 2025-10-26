@@ -9,11 +9,8 @@ PUB_IP=$(ip -4 addr show dev "$PUB_IF" | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | h
 echo "✓ Detected public interface: $PUB_IF ($PUB_IP)"
 echo
 
-# 🔹 Ask user for base port
-echo "🔧 Configure public RDP base port mapping"
-echo "   Recommended range: 49152–65535 (to avoid port scanners)"
-read -p "Enter base port for public RDP access [default: 3389]: " BASE_PORT
-BASE_PORT=${BASE_PORT:-3389}
+# 🔹 Get base port from CLI argument or default to 3389
+BASE_PORT=${1:-3389}
 
 # Validate numeric input
 if ! [[ "$BASE_PORT" =~ ^[0-9]+$ ]]; then
@@ -135,4 +132,3 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo
 echo "✅ Port forwarding is active and persistent across reboots."
 echo "⚠️  Ensure Windows RDP is enabled and firewall allows TCP/UDP 3389."
-echo
