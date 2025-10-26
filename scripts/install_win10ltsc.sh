@@ -378,15 +378,11 @@ cat > "$AUTOUNATTEND_DIR/autounattend.xml" << 'XMLEOF'
       </UserData>
 
       <DynamicUpdate><Enable>false</Enable></DynamicUpdate>
-      <!-- removed invalid <RestartAutomatically> element -->
     </component>
 
     <component name="Microsoft-Windows-PnpCustomizationsWinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
       <DriverPaths>
-      <!-- 
-        [OLD CONFIG - commented out for reference]
-        <PathAndCredentials wcm:action="add" wcm:keyValue="1"><Path>E:\viostor\w10\amd64</Path></PathAndCredentials>
-        <PathAndCredentials wcm:keyValue="1"><Path>E:\vioscsi\w10\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="1"><Path>E:\vioscsi\w10\amd64</Path></PathAndCredentials>
         <PathAndCredentials wcm:action="add" wcm:keyValue="2"><Path>E:\NetKVM\w10\amd64</Path></PathAndCredentials>
         <PathAndCredentials wcm:action="add" wcm:keyValue="3"><Path>E:\vioserial\w10\amd64</Path></PathAndCredentials>
         <PathAndCredentials wcm:action="add" wcm:keyValue="4"><Path>E:\Balloon\w10\amd64</Path></PathAndCredentials>
@@ -394,18 +390,7 @@ cat > "$AUTOUNATTEND_DIR/autounattend.xml" << 'XMLEOF'
         <PathAndCredentials wcm:action="add" wcm:keyValue="6"><Path>E:\qemufwcfg\w10\amd64</Path></PathAndCredentials>
         <PathAndCredentials wcm:action="add" wcm:keyValue="7"><Path>E:\pvpanic\w10\amd64</Path></PathAndCredentials>
         <PathAndCredentials wcm:action="add" wcm:keyValue="8"><Path>E:\vioinput\w10\amd64</Path></PathAndCredentials>
-      -->
-
-      <!-- [NEW CONFIG - uses vioscsi for VirtIO storage detection] -->
-      <PathAndCredentials wcm:action="add" wcm:keyValue="1"><Path>E:\vioscsi\w10\amd64</Path></PathAndCredentials>
-      <PathAndCredentials wcm:action="add" wcm:keyValue="2"><Path>E:\NetKVM\w10\amd64</Path></PathAndCredentials>
-      <PathAndCredentials wcm:action="add" wcm:keyValue="3"><Path>E:\vioserial\w10\amd64</Path></PathAndCredentials>
-      <PathAndCredentials wcm:action="add" wcm:keyValue="4"><Path>E:\Balloon\w10\amd64</Path></PathAndCredentials>
-      <PathAndCredentials wcm:action="add" wcm:keyValue="5"><Path>E:\qemupciserial\w10\amd64</Path></PathAndCredentials>
-      <PathAndCredentials wcm:action="add" wcm:keyValue="6"><Path>E:\qemufwcfg\w10\amd64</Path></PathAndCredentials>
-      <PathAndCredentials wcm:action="add" wcm:keyValue="7"><Path>E:\pvpanic\w10\amd64</Path></PathAndCredentials>
-      <PathAndCredentials wcm:action="add" wcm:keyValue="8"><Path>E:\vioinput\w10\amd64</Path></PathAndCredentials>
-    </DriverPaths>
+      </DriverPaths>
     </component>
   </settings>
 
@@ -414,12 +399,15 @@ cat > "$AUTOUNATTEND_DIR/autounattend.xml" << 'XMLEOF'
       <ComputerName>COMPUTERNAME_PLACEHOLDER</ComputerName>
       <TimeZone>UTC</TimeZone>
     </component>
+
     <component name="Microsoft-Windows-TerminalServices-LocalSessionManager" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
       <fDenyTSConnections>false</fDenyTSConnections>
     </component>
+
     <component name="Microsoft-Windows-TerminalServices-RDP-WinStationExtensions" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-      <UserAuthentication>0</UserAuthentication>
+      <UserAuthentication>1</UserAuthentication>
     </component>
+
     <component name="Networking-MPSSVC-Svc" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
       <FirewallGroups>
         <FirewallGroup wcm:action="add" wcm:keyValue="RemoteDesktop">
@@ -443,6 +431,7 @@ cat > "$AUTOUNATTEND_DIR/autounattend.xml" << 'XMLEOF'
         <SkipUserOOBE>true</SkipUserOOBE>
         <SkipMachineOOBE>true</SkipMachineOOBE>
       </OOBE>
+
       <UserAccounts>
         <LocalAccounts>
           <LocalAccount wcm:action="add">
@@ -453,20 +442,62 @@ cat > "$AUTOUNATTEND_DIR/autounattend.xml" << 'XMLEOF'
           </LocalAccount>
         </LocalAccounts>
       </UserAccounts>
+
       <AutoLogon>
         <Enabled>true</Enabled>
         <Username>USERNAME_PLACEHOLDER</Username>
         <Password><Value>PASSWORD_PLACEHOLDER</Value><PlainText>true</PlainText></Password>
         <LogonCount>1</LogonCount>
       </AutoLogon>
+
       <FirstLogonCommands>
-        <SynchronousCommand wcm:action="add"><Order>1</Order><CommandLine>cmd /c netsh advfirewall set allprofiles state off</CommandLine><Description>Disable Windows Firewall</Description></SynchronousCommand>
-        <SynchronousCommand wcm:action="add"><Order>2</Order><CommandLine>cmd /c reg add "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f</CommandLine><Description>Enable RDP</Description></SynchronousCommand>
-        <SynchronousCommand wcm:action="add"><Order>3</Order><CommandLine>cmd /c netsh advfirewall firewall add rule name="Remote Desktop" protocol=TCP dir=in localport=3389 action=allow</CommandLine><Description>Allow RDP Port</Description></SynchronousCommand>
-        <SynchronousCommand wcm:action="add"><Order>4</Order><CommandLine>cmd /c reg add "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v UserAuthentication /t REG_DWORD /d 1 /f &amp;&amp; reg add "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v SecurityLayer /t REG_DWORD /d 1 /f</CommandLine><Description>Enable NLA (no TLS)</Description></SynchronousCommand>
-        <SynchronousCommand wcm:action="add"><Order>5</Order><CommandLine>cmd /c powercfg -change -monitor-timeout-ac 0</CommandLine><Description>Disable screen timeout</Description></SynchronousCommand>
-        <SynchronousCommand wcm:action="add"><Order>6</Order><CommandLine>cmd /c powercfg -change -standby-timeout-ac 0</CommandLine><Description>Disable sleep</Description></SynchronousCommand>
-        <SynchronousCommand wcm:action="add"><Order>7</Order><CommandLine>cmd /c echo Installation Complete &gt; C:\install_complete.txt</CommandLine><Description>Mark installation complete</Description></SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <CommandLine>cmd /c netsh advfirewall set allprofiles state off</CommandLine>
+          <Description>Disable Windows Firewall</Description>
+        </SynchronousCommand>
+
+        <SynchronousCommand wcm:action="add">
+          <Order>2</Order>
+          <CommandLine>cmd /c reg add "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f</CommandLine>
+          <Description>Enable RDP</Description>
+        </SynchronousCommand>
+
+        <SynchronousCommand wcm:action="add">
+          <Order>3</Order>
+          <CommandLine>cmd /c netsh advfirewall firewall add rule name="Remote Desktop" protocol=TCP dir=in localport=3389 action=allow</CommandLine>
+          <Description>Allow RDP Port</Description>
+        </SynchronousCommand>
+
+        <SynchronousCommand wcm:action="add">
+          <Order>4</Order>
+          <CommandLine>cmd /c reg add "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v UserAuthentication /t REG_DWORD /d 1 /f &amp;&amp; reg add "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v SecurityLayer /t REG_DWORD /d 1 /f</CommandLine>
+          <Description>Enable NLA (no TLS)</Description>
+        </SynchronousCommand>
+
+        <SynchronousCommand wcm:action="add">
+          <Order>5</Order>
+          <CommandLine>cmd /c net accounts /lockoutthreshold:5 /lockoutduration:15 /lockoutwindow:15</CommandLine>
+          <Description>Set account lockout policy (5 attempts, 15 min lock)</Description>
+        </SynchronousCommand>
+
+        <SynchronousCommand wcm:action="add">
+          <Order>6</Order>
+          <CommandLine>cmd /c powercfg -change -monitor-timeout-ac 0</CommandLine>
+          <Description>Disable screen timeout</Description>
+        </SynchronousCommand>
+
+        <SynchronousCommand wcm:action="add">
+          <Order>7</Order>
+          <CommandLine>cmd /c powercfg -change -standby-timeout-ac 0</CommandLine>
+          <Description>Disable sleep</Description>
+        </SynchronousCommand>
+
+        <SynchronousCommand wcm:action="add">
+          <Order>8</Order>
+          <CommandLine>cmd /c echo Installation Complete &gt; C:\install_complete.txt</CommandLine>
+          <Description>Mark installation complete</Description>
+        </SynchronousCommand>
       </FirstLogonCommands>
     </component>
   </settings>
