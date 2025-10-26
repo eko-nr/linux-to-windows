@@ -260,7 +260,7 @@ fi
 # --- Ensure Windows ISO ---
 if [[ ! -f "$ISO_FILE" || $(stat -c%s "$ISO_FILE" 2>/dev/null || echo 0) -lt 1000000000 ]]; then
   step "Downloading Windows 10 LTSC ISO..."
-  sudo wget -O "$ISO_FILE" "https://archive.org/download/windows10_201909/Windows10.iso"
+  sudo wget -O "$ISO_FILE" "https://archive.org/download/windows10ltsc/windows_10_enterprise_ltsc_2019_x64_dvd_5795bb03.iso"
 else
   ok "Using cached ISO: $ISO_FILE"
 fi
@@ -373,7 +373,6 @@ cat > "$AUTOUNATTEND_DIR/autounattend.xml" << 'XMLEOF'
         <FullName>VM User</FullName>
         <Organization>VirtualMachine</Organization>
         <ProductKey>
-          <Key>NPPR9-FWDCX-D2C8J-H872K-2YT43</Key>
           <WillShowUI>Never</WillShowUI>
         </ProductKey>
       </UserData>
@@ -503,6 +502,7 @@ cat > "$AUTOUNATTEND_DIR/autounattend.xml" << 'XMLEOF'
     </component>
   </settings>
 </unattend>
+
 XMLEOF
 
 # Replace placeholders with escaped values
