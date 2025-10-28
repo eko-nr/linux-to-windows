@@ -2,71 +2,69 @@
 set -e
 
 TABLE_NAME="inet filter"
-RULE_COMMENT="block-vnc-ports"
+RULE_COMMENT="block-vnc-external"
+
+# Detect public interface automatically
+EXT_IF=$(ip route get 1.1.1.1 2>/dev/null | awk '/dev/ {print $5; exit}')
+[ -z "$EXT_IF" ] && { echo "❌ Could not detect external interface."; exit 1; }
 
 show_menu() {
   echo "=============================="
-  echo "     Manage VNC Firewall"
+  echo "  Manage External VNC Access  "
   echo "=============================="
-  echo "1) Block VNC ports (5900–5999)"
-  echo "2) Enable VNC (remove block)"
+  echo "Detected external interface: $EXT_IF"
+  echo "1) Block external VNC (5900–5999)"
+  echo "2) Enable (unblock) external VNC"
   echo "3) Show current rules"
   echo "4) Exit"
   echo "=============================="
 }
 
 ensure_nftables_ready() {
-  # Make sure nftables service is running
   if ! systemctl is-active --quiet nftables; then
     echo "Starting nftables service..."
     systemctl start nftables
   fi
 
-  # Create table if missing (safe)
+  # Create table if missing
   if ! nft list tables | grep -q "$TABLE_NAME"; then
     echo "Creating table '$TABLE_NAME'..."
     nft add table $TABLE_NAME
   fi
 
-  # Ensure INPUT chain exists
-  if ! nft list chain $TABLE_NAME input >/dev/null 2>&1; then
-    echo "Creating INPUT chain..."
-    nft add chain $TABLE_NAME input { type filter hook input priority 0\; policy accept\; }
-  fi
-
-  # Ensure FORWARD chain exists
-  if ! nft list chain $TABLE_NAME forward >/dev/null 2>&1; then
-    echo "Creating FORWARD chain..."
-    nft add chain $TABLE_NAME forward { type filter hook forward priority 0\; policy accept\; }
-  fi
+  # Ensure INPUT and FORWARD chains exist
+  for CHAIN in input forward; do
+    if ! nft list chain $TABLE_NAME $CHAIN >/dev/null 2>&1; then
+      echo "Creating chain '$CHAIN'..."
+      nft add chain $TABLE_NAME $CHAIN { type filter hook $CHAIN priority 0\; policy accept\; }
+    fi
+  done
 }
 
 block_vnc() {
-  echo "🔒 Blocking VNC ports (5900–5999)..."
+  echo "🔒 Blocking external VNC access on interface '$EXT_IF'..."
   ensure_nftables_ready
 
   for CHAIN in input forward; do
     if nft list chain $TABLE_NAME $CHAIN | grep -q "$RULE_COMMENT"; then
       echo "✅ Rule already exists in chain '$CHAIN', skipping."
     else
-      echo "➕ Adding rule to chain '$CHAIN'..."
-      nft add rule $TABLE_NAME $CHAIN tcp dport 5900-5999 counter drop comment \"$RULE_COMMENT\"
-      echo "✅ Added rule to '$CHAIN' chain."
+      nft add rule $TABLE_NAME $CHAIN iifname "$EXT_IF" tcp dport 5900-5999 counter drop comment \"$RULE_COMMENT\"
+      echo "✅ Added rule to '$CHAIN' for interface '$EXT_IF'."
     fi
   done
 }
 
 enable_vnc() {
-  echo "🔓 Enabling VNC (removing block rules)..."
+  echo "🔓 Enabling external VNC (removing block rules)..."
   for CHAIN in input forward; do
-    # Check and remove rule safely
     if nft list chain $TABLE_NAME $CHAIN | grep -q "$RULE_COMMENT"; then
       HANDLE=$(nft list chain $TABLE_NAME $CHAIN | grep -B1 "$RULE_COMMENT" | head -1 | awk '{print $2}')
       if [ -n "$HANDLE" ]; then
         nft delete rule $TABLE_NAME $CHAIN handle "$HANDLE"
         echo "✅ Removed rule from '$CHAIN' chain."
       else
-        echo "⚠️  Could not determine handle for '$CHAIN' chain, skipping."
+        echo "⚠️  Could not find handle in '$CHAIN', skipping."
       fi
     else
       echo "ℹ️  No VNC block rule found in '$CHAIN' chain."
@@ -79,7 +77,7 @@ show_rules() {
   nft list table $TABLE_NAME | sed 's/^/   /'
 }
 
-# === Menu Loop ===
+# === Menu loop ===
 while true; do
   show_menu
   read -rp "Select an option [1-4]: " choice
