@@ -4,7 +4,7 @@ set -e
 TABLE_NAME="inet filter"
 RULE_COMMENT="block-vnc-external"
 
-# Detect public interface automatically
+# Auto-detect main public interface
 EXT_IF=$(ip route get 1.1.1.1 2>/dev/null | awk '/dev/ {print $5; exit}')
 [ -z "$EXT_IF" ] && { echo "❌ Could not detect external interface."; exit 1; }
 
@@ -26,13 +26,13 @@ ensure_nftables_ready() {
     systemctl start nftables
   fi
 
-  # Create table if missing
+  # Ensure table exists
   if ! nft list tables | grep -q "$TABLE_NAME"; then
     echo "Creating table '$TABLE_NAME'..."
     nft add table $TABLE_NAME
   fi
 
-  # Ensure INPUT and FORWARD chains exist
+  # Ensure INPUT/FORWARD chains exist
   for CHAIN in input forward; do
     if ! nft list chain $TABLE_NAME $CHAIN >/dev/null 2>&1; then
       echo "Creating chain '$CHAIN'..."
@@ -56,25 +56,21 @@ block_vnc() {
 }
 
 enable_vnc() {
-  echo "🔓 Enabling external VNC (removing block rules)..."
+  echo "🔓 Enabling external VNC (removing only '$RULE_COMMENT' rules)..."
   for CHAIN in input forward; do
-    if nft list chain $TABLE_NAME $CHAIN | grep -q "$RULE_COMMENT"; then
-      # Extract handle numbers robustly
-      HANDLES=$(nft --handle list chain $TABLE_NAME $CHAIN | \
-                awk '/handle/ && /block-vnc-external/ {for(i=1;i<=NF;i++) if($i=="handle") print $(i+1)}')
-      if [ -n "$HANDLES" ]; then
-        for HANDLE in $HANDLES; do
-          if [[ "$HANDLE" =~ ^[0-9]+$ ]]; then
-            echo "🗑  Removing rule handle $HANDLE from chain '$CHAIN'..."
-            nft delete rule $TABLE_NAME $CHAIN handle "$HANDLE"
-          fi
-        done
-        echo "✅ Removed all '$RULE_COMMENT' rules from '$CHAIN'."
-      else
-        echo "⚠️  No valid handles found in '$CHAIN', skipping."
-      fi
+    # find all handles that match our comment
+    HANDLES=$(nft --handle list chain $TABLE_NAME $CHAIN | \
+              awk '/block-vnc-external/ {for(i=1;i<=NF;i++) if($i=="handle") print $(i+1)}')
+    if [ -n "$HANDLES" ]; then
+      for HANDLE in $HANDLES; do
+        if [[ "$HANDLE" =~ ^[0-9]+$ ]]; then
+          echo "🗑  Removing rule handle $HANDLE from chain '$CHAIN'..."
+          nft delete rule $TABLE_NAME $CHAIN handle "$HANDLE"
+        fi
+      done
+      echo "✅ Removed '$RULE_COMMENT' rules from '$CHAIN'."
     else
-      echo "ℹ️  No VNC block rule found in '$CHAIN'."
+      echo "ℹ️  No '$RULE_COMMENT' rules found in '$CHAIN'."
     fi
   done
 }
@@ -84,7 +80,7 @@ show_rules() {
   nft list table $TABLE_NAME | sed 's/^/   /'
 }
 
-# === Menu loop ===
+# === Menu ===
 while true; do
   show_menu
   read -rp "Select an option [1-4]: " choice
