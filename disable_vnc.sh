@@ -14,26 +14,28 @@ fi
 for VM in $VMS; do
   echo "Processing VM: $VM"
 
-  # Dump XML and backup
   virsh dumpxml "$VM" > "$TMPDIR/$VM.xml"
   cp "$TMPDIR/$VM.xml" "$TMPDIR/$VM.xml.bak"
 
-  # Remove any graphics block of type 'vnc'
   if grep -q "<graphics[^>]*type=['\"]vnc['\"]" "$TMPDIR/$VM.xml"; then
-    echo "  → Disabling VNC..."
+    echo "  → Disabling VNC (safe mode)..."
+
     if command -v xmlstarlet >/dev/null 2>&1; then
-      xmlstarlet ed -P -L -d "//graphics[@type='vnc']" "$TMPDIR/$VM.xml"
+      # Replace VNC port to -1 safely
+      xmlstarlet ed -P -L \
+        -u "//graphics[@type='vnc']/@port" -v "-1" \
+        -u "//graphics[@type='vnc']/@listen" -v "127.0.0.1" \
+        "$TMPDIR/$VM.xml"
     else
-      # fallback sed (handles multi-line <graphics>...</graphics>)
-      sed -i '/<graphics[^>]*type=.vnc./,/<\/graphics>/d' "$TMPDIR/$VM.xml"
+      # sed fallback
+      sed -i -E "s/(<graphics[^>]*type=['\"]vnc['\"][^>]*port=)['\"][0-9]+['\"]/\\1'-1'/g" "$TMPDIR/$VM.xml"
+      sed -i -E "s/(<graphics[^>]*type=['\"]vnc['\"][^>]*listen=)['\"][^'\"]*['\"]/\\1'127.0.0.1'/g" "$TMPDIR/$VM.xml"
     fi
 
-    # Validate XML
     if xmllint --noout "$TMPDIR/$VM.xml" 2>/dev/null; then
       virsh define "$TMPDIR/$VM.xml" >/dev/null
-      echo "  ✓ VNC disabled for $VM"
+      echo "  ✓ VNC disabled (RDP safe) for $VM"
 
-      # Force full power cycle so QEMU reloads new XML
       if virsh domstate "$VM" | grep -qi running; then
         echo "  ↻ Power cycling $VM..."
         virsh destroy "$VM" >/dev/null || true
@@ -45,10 +47,10 @@ for VM in $VMS; do
       cp "$TMPDIR/$VM.xml.bak" "$TMPDIR/$VM.xml"
     fi
   else
-    echo "  → No VNC section found, skipping."
+    echo "  → No VNC found, skipping."
   fi
 done
 
 echo
-echo "✅ All VMs processed and power-cycled where applicable."
-echo "Backups are stored in: $TMPDIR"
+echo "✅ All VMs processed and power-cycled safely."
+echo "Backups stored in: $TMPDIR"
