@@ -284,7 +284,7 @@ fi
 # Download atlas b4 x64
 if [[ ! -f "$ISO_FILE" || $(stat -c%s "$ISO_FILE" 2>/dev/null || echo 0) -lt 500000000 ]]; then
   step "Downloading Windows 10 atlas b4 (x64) ISO..."
-  sudo wget -O "$ISO_FILE" "https://archive.org/download/atlas-v0.4.2/Atlas_v0.4.2.iso"
+  sudo wget -O "$ISO_FILE" "https://archive.org/download/atlas-v0.5.1/Atlas_v0.5.1.iso"
 else
   ok "Using cached ISO: $ISO_FILE"
 fi
