@@ -807,39 +807,80 @@ sleep 10
 echo "⏳ Waiting for VM network initialization..."
 echo "   (This may take 30-60 seconds for Windows to boot and get IP address)"
 
+# Temporarily disable exit on error for this monitoring section
+set +e
+
 MAX_WAIT=60
+IP_DETECTED=false
+
 for i in $(seq 1 $MAX_WAIT); do
+  # Check if VM exists and is defined
   if ! sudo virsh dominfo "${VM_NAME}" &>/dev/null; then
-    echo "⚠️ VM ${VM_NAME} not found, breaking..."
+    echo ""
+    echo "⚠️ VM ${VM_NAME} not found or not defined"
     break
   fi
 
-  VM_COUNT=$(sudo virsh list --name | grep -v '^$' | wc -l)
-  if (( VM_COUNT == 0 )); then
-    echo "⚠️ No running VMs detected, trying to start ${VM_NAME}..."
-    sudo virsh start "${VM_NAME}" >/dev/null 2>&1 || true
+  # Count running VMs safely
+  VM_COUNT=$(sudo virsh list --name 2>/dev/null | grep -c -v '^$' || echo "0")
+  
+  if [[ "$VM_COUNT" == "0" ]]; then
+    echo ""
+    echo "⚠️ No running VMs detected, attempting to start ${VM_NAME}..."
+    sudo virsh start "${VM_NAME}" >/dev/null 2>&1
     sleep 5
     continue
   fi
 
-  HAS_IP=$(sudo virsh list --name | while read vm; do
-    [[ -n "$vm" ]] && sudo virsh domifaddr "$vm" 2>/dev/null | grep -q ipv4 && echo "yes" && break
-  done)
+  # Check for IP address safely
+  HAS_IP=""
+  VM_LIST=$(sudo virsh list --name 2>/dev/null || echo "")
+  
+  if [[ -n "$VM_LIST" ]]; then
+    while IFS= read -r vm; do
+      if [[ -n "$vm" ]] && [[ "$vm" != "" ]]; then
+        IP_CHECK=$(sudo virsh domifaddr "$vm" 2>/dev/null | grep -o 'ipv4' || echo "")
+        if [[ "$IP_CHECK" == "ipv4" ]]; then
+          HAS_IP="yes"
+          break
+        fi
+      fi
+    done <<< "$VM_LIST"
+  fi
 
+  # If IP detected, finish successfully
   if [[ "$HAS_IP" == "yes" ]]; then
+    echo ""
     echo "✓ VM IP detected after ${i} seconds"
+    IP_DETECTED=true
     sleep 5
     break
   fi
 
+  # Progress indicator
   if (( i % 10 == 0 )); then
+    echo ""
     echo "   ... still waiting (${i}s / ${MAX_WAIT}s)"
+  else
+    echo -n "."
   fi
 
-  echo -n "."
   sleep 1
 done
+
+# Re-enable exit on error
+set -e
+
 echo ""
+
+# Check final status
+if [[ "$IP_DETECTED" == "true" ]]; then
+  echo "✅ Network initialization successful"
+else
+  echo "⚠️ Timeout waiting for network (${MAX_WAIT}s elapsed)"
+  echo "   VM may still be booting. Check manually with:"
+  echo "   sudo virsh domifaddr ${VM_NAME}"
+fi
 
 echo ""
 if [[ "$INSTALL_COMPLETE" == "true" ]]; then
