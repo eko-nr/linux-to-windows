@@ -59,17 +59,19 @@ enable_vnc() {
   echo "🔓 Enabling external VNC (removing block rules)..."
   for CHAIN in input forward; do
     if nft list chain $TABLE_NAME $CHAIN | grep -q "$RULE_COMMENT"; then
-      # Find rule handles with the comment
+      # Extract handle numbers robustly
       HANDLES=$(nft --handle list chain $TABLE_NAME $CHAIN | \
-                awk '/block-vnc-external/ {print last} {last=$2}')
+                awk '/handle/ && /block-vnc-external/ {for(i=1;i<=NF;i++) if($i=="handle") print $(i+1)}')
       if [ -n "$HANDLES" ]; then
         for HANDLE in $HANDLES; do
-          echo "🗑  Removing rule handle $HANDLE from chain '$CHAIN'..."
-          nft delete rule $TABLE_NAME $CHAIN handle "$HANDLE"
+          if [[ "$HANDLE" =~ ^[0-9]+$ ]]; then
+            echo "🗑  Removing rule handle $HANDLE from chain '$CHAIN'..."
+            nft delete rule $TABLE_NAME $CHAIN handle "$HANDLE"
+          fi
         done
         echo "✅ Removed all '$RULE_COMMENT' rules from '$CHAIN'."
       else
-        echo "⚠️  No valid handles found for '$CHAIN', skipping."
+        echo "⚠️  No valid handles found in '$CHAIN', skipping."
       fi
     else
       echo "ℹ️  No VNC block rule found in '$CHAIN'."
