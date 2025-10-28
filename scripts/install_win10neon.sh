@@ -1,10 +1,10 @@
 #!/bin/bash
 # ============================================================
-# Windows 10 LTSC UNATTENDED Installer for Debian 12+ / Ubuntu 22+
+# Windows 10 Neon UNATTENDED Installer for Debian 12+ / Ubuntu 22+
 # Full automation with reboot handling (FIXED windowsPE parsing)
 # ============================================================
 
-VM_NAME=${1:-win10ltsc}
+VM_NAME=${1:-win10neon}
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PORT_FORWARD_SCRIPT="$SCRIPT_DIR/enable_port_forward_rdp.sh"
 AUTO_RESTART_SCRIPT="$SCRIPT_DIR/auto_restart.sh"
@@ -80,7 +80,7 @@ while true; do
   else warn "Passwords don't match! Try again."; fi
 done
 
-read -p "Computer name [WIN10-LTSC]: " WIN_COMPUTERNAME
+read -p "Computer name [WIN10-NEON]: " WIN_COMPUTERNAME
 WIN_COMPUTERNAME=${WIN_COMPUTERNAME:-WIN10-VM}
 
 # --- VM Config ---
@@ -255,8 +255,8 @@ else ok "Swap already exists"; fi
 # --- ISO Cache ---
 header "Preparing Windows ISO"
 ISO_CACHE="/opt/vm-isos"
-ISO_FILE="${ISO_CACHE}/Windows10-Ltsc.iso"
-ISO_LINK="/var/lib/libvirt/boot/Windows10-Ltsc.iso"
+ISO_FILE="${ISO_CACHE}/Windows10-Neon.iso"
+ISO_LINK="/var/lib/libvirt/boot/Windows10-Neon.iso"
 sudo mkdir -p "$ISO_CACHE" /var/lib/libvirt/boot
 
 # --- Ensure required libvirt system users exist ---
@@ -282,8 +282,8 @@ fi
 
 # --- Ensure Windows ISO ---
 if [[ ! -f "$ISO_FILE" || $(stat -c%s "$ISO_FILE" 2>/dev/null || echo 0) -lt 1000000000 ]]; then
-  step "Downloading Windows 10 LTSC ISO..."
-  sudo wget -O "$ISO_FILE" "hhttps://archive.org/download/en-gb_windows_10_enterprise_ltsc_2019_x64_dvd_cd49b901/en-gb_windows_10_enterprise_ltsc_2019_x64_dvd_cd49b901.iso"
+  step "Downloading Windows 10 Neon ISO..."
+  sudo wget -O "$ISO_FILE" "https://archive.org/download/windows-10-neon-gamer-edition-19043.1237-best-by-fbconan-fullsoft/Windows%2010%20Neon%20Gamer%20Edition%20%2819043.1237%29%20best%20by%20%20FBConan%20fullsoft.iso"
 else
   ok "Using cached ISO: $ISO_FILE"
 fi
@@ -840,7 +840,7 @@ echo ""
 echo ""
 if [[ "$INSTALL_COMPLETE" == "true" ]]; then
   header "Installation Complete!"
-  ok "Windows 10 LTSC installed successfully!"
+  ok "Windows 10 Neon installed successfully!"
   echo ""
   echo -e "${BLUE}VM Details:${NC}"
   echo "  Name: ${VM_NAME}"

@@ -3,7 +3,8 @@
 echo "Select the Windows version you want to uninstall:"
 echo "1) Windows 10 LTSC"
 echo "2) Windows 10 Tiny"
-echo "3) Windows 10 Atlas"
+echo "3) Windows 10 Neon"
+echo "4) Windows 10 Atlas"
 
 read -p "Enter your choice: " choice
 
@@ -17,6 +18,10 @@ case $choice in
     bash scripts/uninstall_win10tiny.sh
     ;;
   3)
+    echo "Uninstalling for Windows 10 Neon..."
+    bash scripts/uninstall_win10neon.sh
+    ;;
+  4)
     echo "Uninstalling for Windows 10 Atlas..."
     bash scripts/uninstall_win10atlas.sh
     ;;
