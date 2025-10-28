@@ -802,7 +802,7 @@ while (( CHECK_COUNT < MAX_CHECKS )); do
   sleep 10
 done
 
-sleep 60
+sleep 10
 # Wait for VM to fully boot and get IP
 echo "⏳ Waiting for VM network initialization..."
 echo "   (This may take 30-60 seconds for Windows to boot and get IP address)"
