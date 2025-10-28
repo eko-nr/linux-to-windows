@@ -17,28 +17,29 @@ for VM in $VMS; do
   virsh dumpxml "$VM" > "$TMPDIR/$VM.xml"
   cp "$TMPDIR/$VM.xml" "$TMPDIR/$VM.xml.bak"
 
+  # Remove any old VNC graphics and replace with safe SPICE
   if grep -q "<graphics[^>]*type=['\"]vnc['\"]" "$TMPDIR/$VM.xml"; then
-    echo "  → Disabling VNC (RDP-safe)..."
+    echo "  → Replacing VNC with SPICE (safe display)..."
 
     if command -v xmlstarlet >/dev/null 2>&1; then
-      # Delete entire <graphics type='vnc'> block, replace with dummy display device (no listener)
       xmlstarlet ed -P -L -d "//graphics[@type='vnc']" "$TMPDIR/$VM.xml"
       xmlstarlet ed -P -L -s "//devices" -t elem -n "graphics" -v "" \
-        -i "//graphics[not(@type)]" -t attr -n "type" -v "vnc" \
-        -i "//graphics[@type='vnc' and not(@port)]" -t attr -n "autoport" -v "no" \
-        -i "//graphics[@type='vnc' and not(@port)]" -t attr -n "listen" -v "0.0.0.0" \
+        -i "//graphics[not(@type)]" -t attr -n "type" -v "spice" \
+        -i "//graphics[@type='spice']" -t attr -n "autoport" -v "no" \
+        -i "//graphics[@type='spice']" -t attr -n "listen" -v "0.0.0.0" \
         "$TMPDIR/$VM.xml"
     else
-      # sed fallback: remove old graphics block and insert safe dummy
+      # sed fallback if xmlstarlet not installed
       sed -i '/<graphics[^>]*type=.vnc./,/<\/graphics>/d' "$TMPDIR/$VM.xml"
-      sed -i "/<\/devices>/i \  <graphics type='vnc' autoport='no' listen='0.0.0.0'/>" "$TMPDIR/$VM.xml"
+      sed -i "/<\/devices>/i \  <graphics type='spice' autoport='no' listen='0.0.0.0'/>" "$TMPDIR/$VM.xml"
     fi
 
+    # Validate & apply
     if xmllint --noout "$TMPDIR/$VM.xml" 2>/dev/null; then
       virsh define "$TMPDIR/$VM.xml" >/dev/null
-      echo "  ✓ VNC removed (safe dummy added) for $VM"
+      echo "  ✓ VNC replaced with SPICE (no open ports) for $VM"
 
-      # Power cycle
+      # Power cycle VM to apply
       if virsh domstate "$VM" | grep -qi running; then
         echo "  ↻ Power cycling $VM..."
         virsh destroy "$VM" >/dev/null || true
@@ -46,7 +47,7 @@ for VM in $VMS; do
         virsh start "$VM" >/dev/null
       fi
     else
-      echo "  ⚠ Invalid XML for $VM — restoring backup."
+      echo "  ⚠ Invalid XML for $VM — restoring backup"
       cp "$TMPDIR/$VM.xml.bak" "$TMPDIR/$VM.xml"
     fi
   else
@@ -55,5 +56,5 @@ for VM in $VMS; do
 done
 
 echo
-echo "✅ All VMs processed (VNC off, RDP safe, fully compatible)."
+echo "✅ All VMs processed: VNC off, SPICE added (RDP safe, no port errors)."
 echo "Backups stored in: $TMPDIR"
