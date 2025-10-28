@@ -3,7 +3,7 @@
 set -euo pipefail
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 VM_NAME=${1:-win10neon}
-ISO_FILE="/opt/vm-isos/Windows10-Tiny.iso"
+ISO_FILE="/opt/vm-isos/Windows10-Neon.iso"
 
 echo -e "${YELLOW}=== Uninstalling VM: ${VM_NAME} ===${NC}"
 
