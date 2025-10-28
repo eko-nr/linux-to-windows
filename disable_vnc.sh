@@ -18,27 +18,27 @@ for VM in $VMS; do
   cp "$TMPDIR/$VM.xml" "$TMPDIR/$VM.xml.bak"
 
   if grep -q "<graphics[^>]*type=['\"]vnc['\"]" "$TMPDIR/$VM.xml"; then
-    echo "  → Disabling VNC (RDP-safe, listen=0.0.0.0)..."
+    echo "  → Disabling VNC (RDP-safe)..."
 
     if command -v xmlstarlet >/dev/null 2>&1; then
-      xmlstarlet ed -P -L \
-        -u "//graphics[@type='vnc']/@port" -v "-1" \
-        -u "//graphics[@type='vnc']/@listen" -v "0.0.0.0" \
-        -u "//graphics[@type='vnc']/listen/@address" -v "0.0.0.0" \
+      # Delete entire <graphics type='vnc'> block, replace with dummy display device (no listener)
+      xmlstarlet ed -P -L -d "//graphics[@type='vnc']" "$TMPDIR/$VM.xml"
+      xmlstarlet ed -P -L -s "//devices" -t elem -n "graphics" -v "" \
+        -i "//graphics[not(@type)]" -t attr -n "type" -v "vnc" \
+        -i "//graphics[@type='vnc' and not(@port)]" -t attr -n "autoport" -v "no" \
+        -i "//graphics[@type='vnc' and not(@port)]" -t attr -n "listen" -v "0.0.0.0" \
         "$TMPDIR/$VM.xml"
     else
-      # sed fallback (multi-line safe)
-      sed -i -E "s/(<graphics[^>]*type=['\"]vnc['\"][^>]*port=)['\"][0-9]+['\"]/\\1'-1'/g" "$TMPDIR/$VM.xml"
-      sed -i -E "s/(<graphics[^>]*type=['\"]vnc['\"][^>]*listen=)['\"][^'\"]*['\"]/\\1'0.0.0.0'/g" "$TMPDIR/$VM.xml"
-      sed -i -E "s/(<listen[^>]*address=)['\"][^'\"]*['\"]/\\1'0.0.0.0'/g" "$TMPDIR/$VM.xml"
+      # sed fallback: remove old graphics block and insert safe dummy
+      sed -i '/<graphics[^>]*type=.vnc./,/<\/graphics>/d' "$TMPDIR/$VM.xml"
+      sed -i "/<\/devices>/i \  <graphics type='vnc' autoport='no' listen='0.0.0.0'/>" "$TMPDIR/$VM.xml"
     fi
 
-    # Validate XML before redefine
     if xmllint --noout "$TMPDIR/$VM.xml" 2>/dev/null; then
       virsh define "$TMPDIR/$VM.xml" >/dev/null
-      echo "  ✓ VNC disabled for $VM (RDP safe)"
+      echo "  ✓ VNC removed (safe dummy added) for $VM"
 
-      # Restart VM to apply config immediately
+      # Power cycle
       if virsh domstate "$VM" | grep -qi running; then
         echo "  ↻ Power cycling $VM..."
         virsh destroy "$VM" >/dev/null || true
@@ -55,5 +55,5 @@ for VM in $VMS; do
 done
 
 echo
-echo "✅ All VMs processed (VNC off, RDP safe, listen=0.0.0.0)."
+echo "✅ All VMs processed (VNC off, RDP safe, fully compatible)."
 echo "Backups stored in: $TMPDIR"
