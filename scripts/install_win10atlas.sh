@@ -401,9 +401,11 @@ cat > "$AUTOUNATTEND_DIR/autounattend.xml" << 'XMLEOF'
         <FullName>VM User</FullName>
         <Organization>VirtualMachine</Organization>
         <ProductKey>
+          <Key></Key>
           <WillShowUI>Never</WillShowUI>
         </ProductKey>
       </UserData>
+
 
       <DynamicUpdate><Enable>false</Enable></DynamicUpdate>
     </component>
