@@ -5,7 +5,6 @@ echo "==============================="
 echo "   Enable VNC for all VMs"
 echo "==============================="
 
-# Ask user for base port
 read -rp "Enter starting VNC port (default 5900): " PORT_BASE
 PORT_BASE=${PORT_BASE:-5900}
 
@@ -26,26 +25,22 @@ for VM in $VMS; do
   virsh dumpxml "$VM" > "$TMPDIR/$VM.xml"
   cp "$TMPDIR/$VM.xml" "$TMPDIR/$VM.xml.bak"
 
-  # Remove any existing graphics (any type)
   if command -v xmlstarlet >/dev/null 2>&1; then
     xmlstarlet ed -P -L -d "//graphics" "$TMPDIR/$VM.xml"
   else
     sed -i '/<graphics /,/<\/graphics>/d' "$TMPDIR/$VM.xml"
   fi
 
-  # Assign sequential ports starting from PORT_BASE
   PORT=$((PORT_BASE + INDEX))
   INDEX=$((INDEX + 1))
 
-  # Insert new graphics tag before </devices>
-  sed -i "/<\/devices>/i \  <graphics type='vnc' port='${PORT}' listen='127.0.0.1' autoport='no'/>" "$TMPDIR/$VM.xml"
+  sed -i "/<\/devices>/i \  <graphics type='vnc' port='${PORT}' listen='0.0.0.0' autoport='no'>\n    <listen type='address' address='0.0.0.0'/>\n  </graphics>" "$TMPDIR/$VM.xml"
 
-  # Validate and apply
+  # Apply & reboot
   if xmllint --noout "$TMPDIR/$VM.xml" 2>/dev/null; then
     virsh define "$TMPDIR/$VM.xml" >/dev/null
-    echo "  ✓ VNC enabled on 127.0.0.1:$PORT for $VM"
+    echo "  ✓ VNC enabled on 0.0.0.0:$PORT for $VM"
 
-    # Power cycle the VM to apply new config
     if virsh domstate "$VM" | grep -qi running; then
       echo "  ↻ Power cycling $VM..."
       virsh destroy "$VM" >/dev/null || true
@@ -59,5 +54,5 @@ for VM in $VMS; do
 done
 
 echo
-echo "✅ All VMs updated and power-cycled where applicable."
+echo "✅ All VMs updated (VNC listen=0.0.0.0, internet safe)."
 echo "Backups stored in: $TMPDIR"
