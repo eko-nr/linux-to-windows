@@ -284,7 +284,7 @@ fi
 # Download atlas b4 x64
 if [[ ! -f "$ISO_FILE" || $(stat -c%s "$ISO_FILE" 2>/dev/null || echo 0) -lt 500000000 ]]; then
   step "Downloading Windows 10 atlas b4 (x64) ISO..."
-  sudo wget -O "$ISO_FILE" "https://archive.org/download/atlas-v0.5.1/Atlas_v0.5.1.iso"
+  sudo wget -O "$ISO_FILE" "https://archive.org/download/atlas-v0.4.2/Atlas_v0.4.2.iso"
 else
   ok "Using cached ISO: $ISO_FILE"
 fi
@@ -495,36 +495,48 @@ cat > "$AUTOUNATTEND_DIR/autounattend.xml" << 'XMLEOF'
 
         <SynchronousCommand wcm:action="add">
           <Order>3</Order>
+          <CommandLine>cmd /c powershell -ExecutionPolicy Bypass -Command "foreach($d in 'D:','E:'){if(Test-Path \"$d\\virtio-win-guest-tools.exe\"){Start-Process -FilePath \"$d\\virtio-win-guest-tools.exe\" -ArgumentList '/S' -Wait}}; Set-Service -Name TermService -StartupType Automatic; Start-Service TermService"</CommandLine>
+          <Description>Install VirtIO guest tools (if present) and ensure RDP service runs</Description>
+        </SynchronousCommand>
+
+        <SynchronousCommand wcm:action="add">
+          <Order>4</Order>
+          <Description>Install RDP Wrapper for Atlas</Description>
+          <CommandLine>cmd /c powershell -ExecutionPolicy Bypass -Command "Invoke-WebRequest https://github.com/stascorp/rdpwrap/releases/latest/download/rdpwrap.zip -OutFile C:\rdpwrap.zip; Expand-Archive C:\rdpwrap.zip -DestinationPath C:\rdpwrap -Force; Start-Process C:\rdpwrap\install.bat -Verb runAs -Wait; Start-Sleep -s 5; Start-Process C:\rdpwrap\RDPConf.exe -Verb runAs"</CommandLine>
+        </SynchronousCommand>
+
+        <SynchronousCommand wcm:action="add">
+          <Order>5</Order>
           <CommandLine>cmd /c netsh advfirewall firewall add rule name="Remote Desktop" protocol=TCP dir=in localport=3389 action=allow</CommandLine>
           <Description>Allow RDP Port</Description>
         </SynchronousCommand>
 
         <SynchronousCommand wcm:action="add">
-          <Order>4</Order>
+          <Order>6</Order>
           <CommandLine>cmd /c reg add "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v UserAuthentication /t REG_DWORD /d 1 /f &amp;&amp; reg add "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v SecurityLayer /t REG_DWORD /d 1 /f</CommandLine>
           <Description>Enable NLA (no TLS)</Description>
         </SynchronousCommand>
 
         <SynchronousCommand wcm:action="add">
-          <Order>5</Order>
+          <Order>7</Order>
           <CommandLine>cmd /c net accounts /lockoutthreshold:5 /lockoutduration:15 /lockoutwindow:15</CommandLine>
           <Description>Set account lockout policy (5 attempts, 15 min lock)</Description>
         </SynchronousCommand>
 
         <SynchronousCommand wcm:action="add">
-          <Order>6</Order>
+          <Order>8</Order>
           <CommandLine>cmd /c powercfg -change -monitor-timeout-ac 0</CommandLine>
           <Description>Disable screen timeout</Description>
         </SynchronousCommand>
 
         <SynchronousCommand wcm:action="add">
-          <Order>7</Order>
+          <Order>9</Order>
           <CommandLine>cmd /c powercfg -change -standby-timeout-ac 0</CommandLine>
           <Description>Disable sleep</Description>
         </SynchronousCommand>
 
         <SynchronousCommand wcm:action="add">
-          <Order>8</Order>
+          <Order>10</Order>
           <CommandLine>cmd /c echo Installation Complete &gt; C:\install_complete.txt</CommandLine>
           <Description>Mark installation complete</Description>
         </SynchronousCommand>
