@@ -65,18 +65,6 @@ echo -e "\n${YELLOW}Enter target mount directory:${NC}"
 echo "Examples: /root, /var/lib/docker, /home, /opt"
 read -p "Mountpoint: " MOUNTPOINT
 
-# SAFETY CHECK: Reject if mounting to /
-if [ "$MOUNTPOINT" = "/" ]; then
-    echo -e "${RED}ERROR: Mounting to / (root filesystem) is NOT ALLOWED!${NC}"
-    echo "Reasons:"
-    echo "  - System will crash"
-    echo "  - Risk of data loss"
-    echo "  - Requires recovery mode to do this"
-    echo ""
-    echo "Use another mountpoint like: /root, /var/lib/docker, /home, etc."
-    exit 1
-fi
-
 # Validate mountpoint
 if [ -z "$MOUNTPOINT" ]; then
     echo -e "${RED}Error: Mountpoint cannot be empty!${NC}"
