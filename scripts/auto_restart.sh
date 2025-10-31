@@ -12,8 +12,8 @@ header(){ echo -e "\n${GREEN}=== $1 ===${NC}"; }
 
 # ============================================================
 # Configuration (edit these values as needed)
-CPU_LIMIT_PERCENT=87
-RAM_LIMIT_PERCENT=84
+CPU_LIMIT_PERCENT=85
+RAM_LIMIT_PERCENT=83
 SWAP_LIMIT_PERCENT=100
 MONITOR_INTERVAL=30
 
