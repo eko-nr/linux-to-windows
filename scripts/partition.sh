@@ -8,11 +8,18 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
 NC='\033[0m' # No Color
 
 # Configuration
-SCRIPT_VERSION="2.0"
+SCRIPT_VERSION="3.0"
 LOG_FILE="/var/log/disk-mount-$(date +%Y%m%d_%H%M%S).log"
+
+# Global variables for multi-partition
+declare -a PARTITIONS=()
+declare -a MOUNT_POINTS=()
+declare -a SIZES=()
+declare -a FILESYSTEMS=()
 
 # Logging function
 log() {
@@ -20,9 +27,11 @@ log() {
 }
 
 print_header() {
-    echo -e "${CYAN}╔════════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║  Auto Disk Partition & Mount Script v${SCRIPT_VERSION}        ║${NC}"
-    echo -e "${CYAN}╚════════════════════════════════════════════════════╝${NC}\n"
+    clear
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║  Universal Disk Partition & Mount Script v${SCRIPT_VERSION}         ║${NC}"
+    echo -e "${CYAN}║  Single & Multi-Partition Support                        ║${NC}"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}\n"
 }
 
 print_section() {
@@ -38,33 +47,44 @@ check_root() {
     fi
 }
 
+# Detect OS
+detect_os() {
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        OS=$NAME
+        VER=$VERSION_ID
+        log "${GREEN}✓ Detected OS: $OS $VER${NC}"
+    else
+        log "${YELLOW}⚠ Cannot detect OS, assuming generic Linux${NC}"
+        OS="Unknown"
+    fi
+}
+
 # Install dependencies
 install_dependencies() {
-    local packages=("rsync" "parted" "blkid")
     local missing=()
     
-    for pkg in "${packages[@]}"; do
+    for pkg in rsync parted; do
         if ! command -v "$pkg" &> /dev/null; then
             missing+=("$pkg")
         fi
     done
     
     if [ ${#missing[@]} -gt 0 ]; then
-        print_section "Installing missing dependencies: ${missing[*]}"
+        print_section "Installing dependencies: ${missing[*]}"
         
         if command -v apt-get &> /dev/null; then
-            apt-get update -qq && apt-get install -y "${missing[@]}"
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -qq && apt-get install -y -qq "${missing[@]}" 2>/dev/null
         elif command -v yum &> /dev/null; then
-            yum install -y "${missing[@]}"
+            yum install -y -q "${missing[@]}" 2>/dev/null
         elif command -v dnf &> /dev/null; then
-            dnf install -y "${missing[@]}"
-        elif command -v pacman &> /dev/null; then
-            pacman -Sy --noconfirm "${missing[@]}"
+            dnf install -y -q "${missing[@]}" 2>/dev/null
         else
-            log "${RED}✗ Error: Cannot install dependencies automatically${NC}"
+            log "${RED}✗ Error: Cannot install dependencies${NC}"
             exit 1
         fi
-        log "${GREEN}✓ Dependencies installed successfully!${NC}"
+        log "${GREEN}✓ Dependencies installed!${NC}"
     fi
 }
 
@@ -80,23 +100,22 @@ get_partition_name() {
     fi
 }
 
-# Display available disks with detailed info
+# Display available disks
 show_disks() {
     print_section "Available Disks"
-    echo -e "${YELLOW}┌─────────────────────────────────────────────────────────────────┐${NC}"
-    printf "%-10s %-10s %-12s %-10s %s\n" "DEVICE" "SIZE" "TYPE" "STATE" "MODEL"
-    echo -e "${YELLOW}├─────────────────────────────────────────────────────────────────┤${NC}"
+    echo -e "${YELLOW}┌──────────────────────────────────────────────────────────────────────┐${NC}"
+    printf "  ${CYAN}%-12s %-10s %-10s %-20s${NC}\n" "DEVICE" "SIZE" "TYPE" "MODEL"
+    echo -e "${YELLOW}├──────────────────────────────────────────────────────────────────────┤${NC}"
     
     while IFS= read -r line; do
         if [[ $line != NAME* ]]; then
-            printf "%-10s %-10s %-12s %-10s %s\n" $line
+            printf "  %-12s %-10s %-10s %-20s\n" $line
         fi
-    done < <(lsblk -d -n -o NAME,SIZE,TYPE,STATE,MODEL | grep disk)
+    done < <(lsblk -d -n -o NAME,SIZE,TYPE,MODEL | grep disk)
     
-    echo -e "${YELLOW}└─────────────────────────────────────────────────────────────────┘${NC}\n"
+    echo -e "${YELLOW}└──────────────────────────────────────────────────────────────────────┘${NC}\n"
     
-    # Show mounted disks
-    echo -e "${CYAN}Currently mounted disks:${NC}"
+    echo -e "${CYAN}Currently mounted:${NC}"
     df -h | grep -E '^/dev/' | awk '{printf "  %s → %s (%s used)\n", $1, $6, $5}'
     echo ""
 }
@@ -118,7 +137,7 @@ select_disk() {
         local disk="${disks[$i]}"
         local size=$(lsblk -d -n -o SIZE "/dev/$disk")
         local model=$(lsblk -d -n -o MODEL "/dev/$disk" | xargs)
-        printf "  ${GREEN}[%d]${NC} %s (%s) - %s\n" $((i+1)) "$disk" "$size" "$model"
+        printf "  ${GREEN}[%d]${NC} %-10s (%s) - %s\n" $((i+1)) "$disk" "$size" "$model"
     done
     
     while true; do
@@ -131,51 +150,81 @@ select_disk() {
     done
     
     DISK_PATH="/dev/${DISK_NAME}"
+    DISK_SIZE_BYTES=$(lsblk -d -n -b -o SIZE "$DISK_PATH")
+    DISK_SIZE_GB=$((DISK_SIZE_BYTES / 1024 / 1024 / 1024))
 }
 
 # Validate disk
 validate_disk() {
-    # Check if disk exists
     if [ ! -b "$DISK_PATH" ]; then
         log "${RED}✗ Error: Disk $DISK_PATH not found!${NC}"
         exit 1
     fi
     
-    # Check if disk or any partition is mounted
     if mount | grep -q "^$DISK_PATH"; then
-        log "${RED}✗ Error: Disk or its partitions are currently mounted!${NC}"
+        log "${RED}✗ Error: Disk partitions are mounted!${NC}"
         mount | grep "^$DISK_PATH"
-        echo -e "\nUnmount first with: umount <partition>"
         exit 1
     fi
     
-    # Check if disk is in use
-    if [ -n "$(lsof 2>/dev/null | grep "$DISK_PATH")" ]; then
-        log "${YELLOW}⚠ Warning: Disk appears to be in use by some process${NC}"
-        lsof 2>/dev/null | grep "$DISK_PATH"
-        read -p "Continue anyway? (yes/no): " response
-        [ "$response" != "yes" ] && exit 0
-    fi
-    
-    # Show existing partitions
     if lsblk "$DISK_PATH" | grep -q part; then
-        log "${YELLOW}⚠ Warning: This disk already has partitions:${NC}"
+        log "${YELLOW}⚠ Warning: Disk has existing partitions:${NC}"
         lsblk "$DISK_PATH"
-        read -p "Continue? All data will be LOST! (yes/no): " CONFIRM
+        echo ""
+        read -p "Continue? ALL DATA WILL BE LOST! (yes/no): " CONFIRM
         [ "$CONFIRM" != "yes" ] && exit 0
     fi
+    
+    log "${GREEN}✓ Disk validated: $DISK_PATH (${DISK_SIZE_GB}GB)${NC}"
+}
+
+# Select partition mode
+select_partition_mode() {
+    echo -e "\n${YELLOW}╔══════════════════════════════════════════════════╗${NC}"
+    echo -e "${YELLOW}║  Select Partitioning Mode                        ║${NC}"
+    echo -e "${YELLOW}╚══════════════════════════════════════════════════╝${NC}\n"
+    
+    echo -e "  ${GREEN}[1]${NC} ${CYAN}Single Partition${NC}"
+    echo -e "      Mount entire disk to ONE directory"
+    echo -e "      Example: 500GB → /data"
+    echo ""
+    echo -e "  ${GREEN}[2]${NC} ${MAGENTA}Multi-Partition${NC}"
+    echo -e "      Split disk into MULTIPLE partitions"
+    echo -e "      Example: 20%→/root, 30%→/var, 50%→/opt"
+    echo ""
+    
+    while true; do
+        read -p "Enter choice (1-2) [default: 1]: " mode_choice
+        mode_choice=${mode_choice:-1}
+        
+        case $mode_choice in
+            1) 
+                PARTITION_MODE="single"
+                log "${GREEN}✓ Selected: Single Partition${NC}"
+                break 
+                ;;
+            2) 
+                PARTITION_MODE="multi"
+                log "${GREEN}✓ Selected: Multi-Partition${NC}"
+                break 
+                ;;
+            *) echo -e "${RED}Invalid selection!${NC}" ;;
+        esac
+    done
 }
 
 # Select filesystem type
 select_filesystem() {
-    echo -e "\n${YELLOW}Select filesystem type:${NC}"
-    echo "  ${GREEN}[1]${NC} ext4 (recommended for Linux)"
+    local prompt_msg="${1:-Select filesystem type}"
+    
+    echo -e "\n${YELLOW}${prompt_msg}:${NC}"
+    echo "  ${GREEN}[1]${NC} ext4 (recommended, stable)"
     echo "  ${GREEN}[2]${NC} xfs (better for large files)"
-    echo "  ${GREEN}[3]${NC} btrfs (advanced features, snapshots)"
-    echo "  ${GREEN}[4]${NC} ext3 (older, more compatible)"
+    echo "  ${GREEN}[3]${NC} btrfs (advanced features)"
+    echo "  ${GREEN}[4]${NC} ext3 (legacy compatibility)"
     
     while true; do
-        read -p "Enter number (1-4) [default: 1]: " fs_choice
+        read -p "Choice (1-4) [default: 1]: " fs_choice
         fs_choice=${fs_choice:-1}
         
         case $fs_choice in
@@ -183,320 +232,410 @@ select_filesystem() {
             2) FS_TYPE="xfs"; break ;;
             3) FS_TYPE="btrfs"; break ;;
             4) FS_TYPE="ext3"; break ;;
-            *) echo -e "${RED}Invalid selection!${NC}" ;;
+            *) echo -e "${RED}Invalid!${NC}" ;;
         esac
     done
 }
 
-# Select partition scheme
-select_partition_scheme() {
-    echo -e "\n${YELLOW}Select partition scheme:${NC}"
-    echo "  ${GREEN}[1]${NC} Single partition (use entire disk)"
-    echo "  ${GREEN}[2]${NC} Custom partition size"
+# Validate mountpoint
+validate_mountpoint() {
+    local mp=$1
+    
+    # Check empty
+    if [ -z "$mp" ]; then
+        echo "empty"
+        return 1
+    fi
+    
+    # Check absolute path
+    if [[ ! "$mp" =~ ^/ ]]; then
+        echo "not_absolute"
+        return 1
+    fi
+    
+    # Check critical paths
+    local critical=("/" "/boot" "/etc" "/usr" "/bin" "/sbin" "/lib" "/lib64" "/sys" "/proc" "/dev")
+    for cpath in "${critical[@]}"; do
+        if [ "$mp" = "$cpath" ]; then
+            echo "critical"
+            return 1
+        fi
+    done
+    
+    # Check if already in list
+    for existing in "${MOUNT_POINTS[@]}"; do
+        if [ "$existing" = "$mp" ]; then
+            echo "duplicate"
+            return 1
+        fi
+    done
+    
+    # Check if already mounted
+    if mountpoint -q "$mp" 2>/dev/null; then
+        echo "mounted"
+        return 1
+    fi
+    
+    echo "valid"
+    return 0
+}
+
+# Get mountpoint input
+get_mountpoint_input() {
+    local prompt_msg="$1"
     
     while true; do
-        read -p "Enter number (1-2) [default: 1]: " scheme_choice
-        scheme_choice=${scheme_choice:-1}
+        read -p "$prompt_msg" mp_input
         
-        case $scheme_choice in
-            1) 
-                PARTITION_SCHEME="full"
-                break 
+        local validation=$(validate_mountpoint "$mp_input")
+        
+        case $validation in
+            "valid")
+                MOUNTPOINT="$mp_input"
+                return 0
                 ;;
-            2) 
-                PARTITION_SCHEME="custom"
-                local disk_size=$(lsblk -d -n -o SIZE -b "$DISK_PATH")
-                local disk_size_gb=$((disk_size / 1024 / 1024 / 1024))
-                echo -e "Available space: ${GREEN}${disk_size_gb}GB${NC}"
-                read -p "Enter partition size (e.g., 50G, 500M) [default: all]: " PARTITION_SIZE
-                PARTITION_SIZE=${PARTITION_SIZE:-100%}
-                break
+            "empty")
+                log "${RED}✗ Mountpoint cannot be empty!${NC}"
                 ;;
-            *) echo -e "${RED}Invalid selection!${NC}" ;;
+            "not_absolute")
+                log "${RED}✗ Must be absolute path (start with /)${NC}"
+                ;;
+            "critical")
+                log "${RED}✗ Cannot use critical system path!${NC}"
+                ;;
+            "duplicate")
+                log "${RED}✗ Already in partition list!${NC}"
+                ;;
+            "mounted")
+                log "${RED}✗ Already mounted!${NC}"
+                ;;
         esac
     done
 }
 
-# Input and validate mountpoint
-get_mountpoint() {
-    echo -e "\n${YELLOW}Common mount points:${NC}"
-    echo "  • /mnt/data - General data storage"
-    echo "  • /var/lib/docker - Docker storage"
-    echo "  • /home - User home directories"
-    echo "  • /opt - Optional software"
-    echo "  • Custom path"
+# Configure single partition
+configure_single_partition() {
+    print_section "Single Partition Configuration"
+    
+    echo -e "${CYAN}Disk size: ${GREEN}${DISK_SIZE_GB}GB${NC}\n"
+    
+    # Show common examples
+    echo -e "${YELLOW}Common mountpoint examples:${NC}"
+    echo "  • /data        - General data storage"
+    echo "  • /mnt/storage - External storage mount"
+    echo "  • /opt         - Optional software"
+    echo "  • /srv         - Service data"
+    echo "  • /backup      - Backup storage"
+    echo "  • Any custom path you want"
+    echo ""
+    
+    # Get mountpoint
+    get_mountpoint_input "Enter mountpoint (e.g., /data): "
+    
+    # Select filesystem
+    select_filesystem
+    
+    # Store configuration
+    PARTITIONS=("$(get_partition_name $DISK_PATH 1)")
+    MOUNT_POINTS=("$MOUNTPOINT")
+    SIZES=("100")
+    FILESYSTEMS=("$FS_TYPE")
+    
+    log "${GREEN}✓ Configuration: ${DISK_SIZE_GB}GB → $MOUNTPOINT ($FS_TYPE)${NC}"
+}
+
+# Configure multi-partition
+configure_multi_partition() {
+    print_section "Multi-Partition Configuration"
+    
+    echo -e "${CYAN}Total disk size: ${GREEN}${DISK_SIZE_GB}GB${NC}\n"
+    
+    # Show presets
+    echo -e "${YELLOW}Quick Presets (or choose Custom):${NC}"
+    echo -e "  ${GREEN}[1]${NC} Docker:    20%→/root, 30%→/var, 50%→/opt"
+    echo -e "  ${GREEN}[2]${NC} Web:       15%→/root, 25%→/var, 40%→/srv, 20%→/data"
+    echo -e "  ${GREEN}[3]${NC} Database:  10%→/root, 20%→/var, 60%→/data, 10%→/backup"
+    echo -e "  ${GREEN}[4]${NC} General:   20%→/root, 30%→/var, 30%→/opt, 20%→/data"
+    echo -e "  ${GREEN}[5]${NC} ${CYAN}Custom (define your own)${NC}"
+    echo ""
+    
+    read -p "Select (1-5) [default: 5]: " preset
+    preset=${preset:-5}
+    
+    case $preset in
+        1) apply_preset "/root:20:ext4" "/var:30:ext4" "/opt:50:ext4" ;;
+        2) apply_preset "/root:15:ext4" "/var:25:ext4" "/srv:40:ext4" "/data:20:xfs" ;;
+        3) apply_preset "/root:10:ext4" "/var:20:ext4" "/data:60:xfs" "/backup:10:ext4" ;;
+        4) apply_preset "/root:20:ext4" "/var:30:ext4" "/opt:30:ext4" "/data:20:xfs" ;;
+        5) configure_custom_partitions ;;
+        *) log "${RED}Invalid, using custom${NC}"; configure_custom_partitions ;;
+    esac
+}
+
+# Apply preset configuration
+apply_preset() {
+    local configs=("$@")
+    
+    for config in "${configs[@]}"; do
+        IFS=':' read -r mp size fs <<< "$config"
+        MOUNT_POINTS+=("$mp")
+        SIZES+=("$size")
+        FILESYSTEMS+=("$fs")
+    done
+    
+    for i in "${!MOUNT_POINTS[@]}"; do
+        PARTITIONS+=("$(get_partition_name $DISK_PATH $((i+1)))")
+    done
+    
+    log "${GREEN}✓ Preset applied${NC}"
+}
+
+# Configure custom partitions
+configure_custom_partitions() {
+    echo -e "\n${CYAN}═══ Custom Multi-Partition Setup ═══${NC}"
+    echo -e "${YELLOW}Define each partition manually${NC}\n"
+    
+    local remaining=100
+    local part_num=1
     
     while true; do
-        read -p "Enter mountpoint path: " MOUNTPOINT
-        
-        # Validate empty
-        if [ -z "$MOUNTPOINT" ]; then
-            log "${RED}✗ Mountpoint cannot be empty!${NC}"
-            continue
+        if [ $remaining -le 0 ]; then
+            log "${GREEN}✓ All space allocated!${NC}"
+            break
         fi
         
-        # Validate absolute path
-        if [[ ! "$MOUNTPOINT" =~ ^/ ]]; then
-            log "${RED}✗ Mountpoint must be an absolute path (start with /)${NC}"
-            continue
-        fi
+        echo -e "\n${MAGENTA}━━━ Partition #$part_num ━━━${NC}"
+        echo -e "Remaining: ${GREEN}${remaining}%${NC} (≈$((DISK_SIZE_GB * remaining / 100))GB)"
         
-        # Warn about critical paths
-        local critical_paths=("/" "/boot" "/etc" "/usr" "/bin" "/sbin" "/lib" "/lib64" "/sys" "/proc" "/dev")
-        local is_critical=false
-        for cpath in "${critical_paths[@]}"; do
-            if [ "$MOUNTPOINT" = "$cpath" ]; then
-                log "${RED}✗ Cannot use critical system path: $cpath${NC}"
-                is_critical=true
+        # Ask if user wants to add partition
+        if [ $part_num -gt 1 ]; then
+            read -p "Add another partition? (yes/no): " add_more
+            if [ "$add_more" != "yes" ]; then
+                # Use remaining space for last partition
+                if [ ${#MOUNT_POINTS[@]} -gt 0 ]; then
+                    SIZES[$((${#SIZES[@]}-1))]=$((${SIZES[$((${#SIZES[@]}-1))]} + remaining))
+                    log "${GREEN}✓ Remaining ${remaining}% added to last partition${NC}"
+                fi
                 break
             fi
+        fi
+        
+        # Get mountpoint
+        echo ""
+        echo -e "${YELLOW}Examples: /root, /var, /opt, /data, /backup, /home, /srv${NC}"
+        get_mountpoint_input "Mountpoint: "
+        
+        # Get size percentage
+        while true; do
+            read -p "Size in % (1-${remaining}): " size_input
+            if [[ "$size_input" =~ ^[0-9]+$ ]] && [ "$size_input" -ge 1 ] && [ "$size_input" -le "$remaining" ]; then
+                SIZE_PERCENT=$size_input
+                break
+            fi
+            echo -e "${RED}Invalid! Must be 1-${remaining}${NC}"
         done
-        [ "$is_critical" = true ] && continue
         
-        # Check if already mounted
-        if mountpoint -q "$MOUNTPOINT" 2>/dev/null; then
-            log "${RED}✗ $MOUNTPOINT is already a mount point!${NC}"
-            mount | grep "$MOUNTPOINT"
-            continue
-        fi
+        # Select filesystem
+        select_filesystem "Filesystem for $MOUNTPOINT"
         
-        # Check if in fstab
-        if grep -q " $MOUNTPOINT " /etc/fstab; then
-            log "${YELLOW}⚠ Warning: $MOUNTPOINT already in /etc/fstab${NC}"
-            grep " $MOUNTPOINT " /etc/fstab
-            read -p "Continue? (yes/no): " response
-            [ "$response" != "yes" ] && continue
-        fi
+        # Store configuration
+        MOUNT_POINTS+=("$MOUNTPOINT")
+        SIZES+=("$SIZE_PERCENT")
+        FILESYSTEMS+=("$FS_TYPE")
+        PARTITIONS+=("$(get_partition_name $DISK_PATH $part_num)")
         
-        break
+        remaining=$((remaining - SIZE_PERCENT))
+        size_gb=$((DISK_SIZE_GB * SIZE_PERCENT / 100))
+        
+        log "${GREEN}✓ Added: ${size_gb}GB → $MOUNTPOINT ($FS_TYPE)${NC}"
+        
+        part_num=$((part_num + 1))
     done
+    
+    if [ ${#MOUNT_POINTS[@]} -eq 0 ]; then
+        log "${RED}✗ No partitions configured!${NC}"
+        exit 1
+    fi
 }
 
-# Display configuration summary
+# Show summary
 show_summary() {
     print_section "Configuration Summary"
-    echo -e "${YELLOW}╔════════════════════════════════════════════════╗${NC}"
-    echo -e "${YELLOW}║  Configuration Details                         ║${NC}"
-    echo -e "${YELLOW}╠════════════════════════════════════════════════╣${NC}"
-    printf "${YELLOW}║${NC}  %-20s : %-22s ${YELLOW}║${NC}\n" "Disk" "$DISK_PATH"
-    printf "${YELLOW}║${NC}  %-20s : %-22s ${YELLOW}║${NC}\n" "Disk Size" "$(lsblk -d -n -o SIZE $DISK_PATH)"
-    printf "${YELLOW}║${NC}  %-20s : %-22s ${YELLOW}║${NC}\n" "Partition" "$(get_partition_name $DISK_PATH 1)"
-    printf "${YELLOW}║${NC}  %-20s : %-22s ${YELLOW}║${NC}\n" "Filesystem" "$FS_TYPE"
-    printf "${YELLOW}║${NC}  %-20s : %-22s ${YELLOW}║${NC}\n" "Mount Point" "$MOUNTPOINT"
-    printf "${YELLOW}║${NC}  %-20s : %-22s ${YELLOW}║${NC}\n" "Auto-mount" "Yes (via fstab)"
-    echo -e "${YELLOW}╚════════════════════════════════════════════════╝${NC}"
     
-    echo -e "\n${RED}⚠  WARNING: ALL DATA ON $DISK_PATH WILL BE PERMANENTLY DELETED! ⚠${NC}\n"
+    echo -e "${YELLOW}╔═══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${YELLOW}║  Disk: ${DISK_PATH} (${DISK_SIZE_GB}GB)${NC}"
+    echo -e "${YELLOW}╠═══════════════════════════════════════════════════════╣${NC}"
     
-    read -p "Proceed with these settings? (yes/no): " FINAL_CONFIRM
-    [ "$FINAL_CONFIRM" != "yes" ] && exit 0
+    for i in "${!PARTITIONS[@]}"; do
+        local size_gb=$((DISK_SIZE_GB * ${SIZES[$i]} / 100))
+        printf "${YELLOW}║${NC}  ${GREEN}%-15s${NC} → %-15s %5dGB  %-8s ${YELLOW}║${NC}\n" \
+            "${PARTITIONS[$i]}" "${MOUNT_POINTS[$i]}" "$size_gb" "${FILESYSTEMS[$i]}"
+    done
+    
+    echo -e "${YELLOW}╚═══════════════════════════════════════════════════════╝${NC}"
+    
+    echo -e "\n${RED}⚠  WARNING: ALL DATA ON $DISK_PATH WILL BE DELETED! ⚠${NC}\n"
+    
+    read -p "Proceed? (yes/no): " confirm
+    [ "$confirm" != "yes" ] && exit 0
 }
 
-# Create partition
-create_partition() {
-    print_section "Creating Partition"
+# Create partitions
+create_partitions() {
+    print_section "Creating Partitions"
     
-    # Wipe existing partition table
-    log "  Wiping existing partition table..."
+    log "  Wiping disk..."
     wipefs -af "$DISK_PATH" &>/dev/null || true
     dd if=/dev/zero of="$DISK_PATH" bs=512 count=1 &>/dev/null
     
-    # Create new partition
-    log "  Creating new partition..."
-    if [ "$PARTITION_SCHEME" = "full" ]; then
-        parted -s "$DISK_PATH" mklabel gpt
-        parted -s "$DISK_PATH" mkpart primary "$FS_TYPE" 0% 100%
-    else
-        parted -s "$DISK_PATH" mklabel gpt
-        parted -s "$DISK_PATH" mkpart primary "$FS_TYPE" 0% "$PARTITION_SIZE"
-    fi
+    log "  Creating GPT partition table..."
+    parted -s "$DISK_PATH" mklabel gpt
     
-    # Wait for kernel to recognize partition
-    sleep 2
+    local start=0
+    for i in "${!PARTITIONS[@]}"; do
+        local size=${SIZES[$i]}
+        local end=$((start + size))
+        local fs=${FILESYSTEMS[$i]}
+        
+        log "  Creating partition $((i+1)): ${size}% ($fs)"
+        parted -s "$DISK_PATH" mkpart primary "$fs" "${start}%" "${end}%"
+        
+        start=$end
+    done
+    
+    sleep 3
     partprobe "$DISK_PATH" 2>/dev/null || true
     sleep 2
     
-    PARTITION=$(get_partition_name "$DISK_PATH" 1)
-    
-    # Verify partition exists
-    if [ ! -b "$PARTITION" ]; then
-        log "${RED}✗ Failed to create partition!${NC}"
-        exit 1
-    fi
-    
-    log "${GREEN}✓ Partition created: $PARTITION${NC}"
+    log "${GREEN}✓ Partitions created${NC}"
 }
 
-# Format partition
-format_partition() {
-    print_section "Formatting Partition"
+# Format partitions
+format_partitions() {
+    print_section "Formatting Partitions"
     
-    log "  Formatting $PARTITION as $FS_TYPE..."
-    
-    case $FS_TYPE in
-        ext4)
-            mkfs.ext4 -F -L "$(basename $MOUNTPOINT)" "$PARTITION" &>/dev/null
-            ;;
-        ext3)
-            mkfs.ext3 -F -L "$(basename $MOUNTPOINT)" "$PARTITION" &>/dev/null
-            ;;
-        xfs)
-            mkfs.xfs -f -L "$(basename $MOUNTPOINT)" "$PARTITION" &>/dev/null
-            ;;
-        btrfs)
-            mkfs.btrfs -f -L "$(basename $MOUNTPOINT)" "$PARTITION" &>/dev/null
-            ;;
-    esac
-    
-    if [ $? -ne 0 ]; then
-        log "${RED}✗ Format failed!${NC}"
-        exit 1
-    fi
-    
-    log "${GREEN}✓ Partition formatted successfully${NC}"
-}
-
-# Backup and migrate data
-backup_and_migrate() {
-    if [ -d "$MOUNTPOINT" ] && [ "$(ls -A $MOUNTPOINT 2>/dev/null)" ]; then
-        print_section "Backing Up Existing Data"
+    for i in "${!PARTITIONS[@]}"; do
+        local part="${PARTITIONS[$i]}"
+        local fs="${FILESYSTEMS[$i]}"
+        local label=$(basename "${MOUNT_POINTS[$i]}")
         
-        local data_size=$(du -sh "$MOUNTPOINT" 2>/dev/null | awk '{print $1}')
-        log "  Found existing data: ${YELLOW}${data_size}${NC}"
+        log "  Formatting $part as $fs..."
         
-        read -p "Migrate data to new partition? (yes/no): " migrate
+        case $fs in
+            ext4) mkfs.ext4 -F -L "$label" "$part" &>/dev/null ;;
+            ext3) mkfs.ext3 -F -L "$label" "$part" &>/dev/null ;;
+            xfs) mkfs.xfs -f -L "$label" "$part" &>/dev/null ;;
+            btrfs) mkfs.btrfs -f -L "$label" "$part" &>/dev/null ;;
+        esac
         
-        if [ "$migrate" = "yes" ]; then
-            # Mount to temporary location
-            TMP_MOUNT="/mnt/tmp_newdisk_$$"
-            mkdir -p "$TMP_MOUNT"
-            mount "$PARTITION" "$TMP_MOUNT"
-            
-            log "  Copying data (this may take a while)..."
-            rsync -avxHAX --info=progress2 "${MOUNTPOINT}/" "$TMP_MOUNT/"
-            
-            if [ $? -eq 0 ]; then
-                log "${GREEN}✓ Data migration completed${NC}"
-                umount "$TMP_MOUNT"
-                rmdir "$TMP_MOUNT"
-                
-                # Backup original
-                mv "$MOUNTPOINT" "${MOUNTPOINT}.old.$(date +%Y%m%d_%H%M%S)"
-                log "  Original data backed up to: ${MOUNTPOINT}.old.*"
-            else
-                log "${RED}✗ Data migration failed!${NC}"
-                umount "$TMP_MOUNT"
-                rmdir "$TMP_MOUNT"
-                exit 1
-            fi
-        else
-            # Just rename
-            mv "$MOUNTPOINT" "${MOUNTPOINT}.old.$(date +%Y%m%d_%H%M%S)"
-            log "  Original directory renamed"
+        if [ $? -ne 0 ]; then
+            log "${RED}✗ Format failed for $part!${NC}"
+            exit 1
         fi
-    else
-        rm -rf "$MOUNTPOINT" 2>/dev/null || true
-    fi
+    done
+    
+    log "${GREEN}✓ All partitions formatted${NC}"
 }
 
-# Mount partition
-mount_partition() {
-    print_section "Mounting Partition"
+# Backup and mount
+backup_and_mount() {
+    print_section "Mounting Partitions"
     
-    mkdir -p "$MOUNTPOINT"
-    mount "$PARTITION" "$MOUNTPOINT"
-    
-    if [ $? -ne 0 ]; then
-        log "${RED}✗ Mount failed!${NC}"
-        exit 1
-    fi
-    
-    log "${GREEN}✓ Partition mounted to $MOUNTPOINT${NC}"
+    for i in "${!PARTITIONS[@]}"; do
+        local part="${PARTITIONS[$i]}"
+        local mp="${MOUNT_POINTS[$i]}"
+        
+        # Backup if directory exists with data
+        if [ -d "$mp" ] && [ "$(ls -A $mp 2>/dev/null)" ]; then
+            local backup="${mp}.backup.$(date +%Y%m%d_%H%M%S)"
+            log "  Backing up $mp → $backup"
+            mv "$mp" "$backup"
+        else
+            rm -rf "$mp" 2>/dev/null || true
+        fi
+        
+        # Create and mount
+        mkdir -p "$mp"
+        mount "$part" "$mp"
+        
+        if [ $? -eq 0 ]; then
+            log "${GREEN}✓ Mounted: $part → $mp${NC}"
+        else
+            log "${RED}✗ Mount failed: $part${NC}"
+            exit 1
+        fi
+    done
 }
 
-# Add to fstab
+# Update fstab
 update_fstab() {
     print_section "Updating /etc/fstab"
     
-    # Get UUID
-    UUID=$(blkid -s UUID -o value "$PARTITION")
+    cp /etc/fstab /etc/fstab.backup.$(date +%Y%m%d_%H%M%S)
     
-    if [ -z "$UUID" ]; then
-        log "${YELLOW}⚠ Warning: Could not get UUID, using device path${NC}"
-        FSTAB_ENTRY="$PARTITION"
-    else
-        FSTAB_ENTRY="UUID=$UUID"
-    fi
-    
-    # Check if entry exists
-    if grep -q "$MOUNTPOINT" /etc/fstab; then
-        log "${YELLOW}⚠ Entry already exists in /etc/fstab, skipping${NC}"
-    else
-        # Backup fstab
-        cp /etc/fstab /etc/fstab.backup.$(date +%Y%m%d_%H%M%S)
+    for i in "${!PARTITIONS[@]}"; do
+        local part="${PARTITIONS[$i]}"
+        local mp="${MOUNT_POINTS[$i]}"
+        local fs="${FILESYSTEMS[$i]}"
+        local uuid=$(blkid -s UUID -o value "$part")
         
-        # Add entry
-        echo "$FSTAB_ENTRY    $MOUNTPOINT    $FS_TYPE    defaults    0    2" >> /etc/fstab
-        log "${GREEN}✓ Added to /etc/fstab (backup created)${NC}"
-    fi
-    
-    # Test fstab
-    if mount -a 2>/dev/null; then
-        log "${GREEN}✓ /etc/fstab validation passed${NC}"
-    else
-        log "${YELLOW}⚠ /etc/fstab validation warning (mount may already be active)${NC}"
-    fi
+        if grep -q " $mp " /etc/fstab; then
+            log "${YELLOW}⚠ $mp already in fstab, skipping${NC}"
+            continue
+        fi
+        
+        if [ -n "$uuid" ]; then
+            echo "UUID=$uuid    $mp    $fs    defaults    0    2" >> /etc/fstab
+            log "${GREEN}✓ Added to fstab: $mp${NC}"
+        else
+            log "${YELLOW}⚠ No UUID for $part, using device path${NC}"
+            echo "$part    $mp    $fs    defaults    0    2" >> /etc/fstab
+        fi
+    done
 }
 
 # Show final status
 show_status() {
-    print_section "Final Status"
+    print_section "Installation Complete!"
     
-    echo -e "${GREEN}✓ Operation completed successfully!${NC}\n"
+    echo -e "\n${GREEN}✓ All operations completed successfully!${NC}\n"
     
-    echo -e "${CYAN}Mount Information:${NC}"
-    df -h "$MOUNTPOINT" | tail -1
+    echo -e "${CYAN}Mounted Partitions:${NC}"
+    for mp in "${MOUNT_POINTS[@]}"; do
+        df -h "$mp" | tail -1
+    done
     
-    echo -e "\n${CYAN}Partition Details:${NC}"
+    echo -e "\n${CYAN}Partition Layout:${NC}"
     lsblk "$DISK_PATH"
     
-    echo -e "\n${CYAN}Filesystem Info:${NC}"
-    blkid "$PARTITION"
-    
-    if ls "${MOUNTPOINT}.old."* &>/dev/null; then
-        echo -e "\n${YELLOW}Note:${NC} Old data backed up to: ${MOUNTPOINT}.old.*"
-        echo "Remove with: rm -rf ${MOUNTPOINT}.old.*"
-    fi
-    
-    echo -e "\n${GREEN}🎉 Disk successfully partitioned and mounted!${NC}"
-    echo -e "Log file: ${LOG_FILE}"
+    echo -e "\n${GREEN}🎉 Done! Disk ready to use.${NC}"
+    echo -e "Log: ${LOG_FILE}"
 }
 
 # Main execution
 main() {
     print_header
-    
     check_root
+    detect_os
     install_dependencies
     
     show_disks
     select_disk
     validate_disk
+    select_partition_mode
     
-    select_filesystem
-    select_partition_scheme
-    get_mountpoint
+    if [ "$PARTITION_MODE" = "single" ]; then
+        configure_single_partition
+    else
+        configure_multi_partition
+    fi
     
     show_summary
-    
-    create_partition
-    format_partition
-    backup_and_migrate
-    mount_partition
+    create_partitions
+    format_partitions
+    backup_and_mount
     update_fstab
-    
     show_status
 }
 
-# Run main function
 main "$@"
