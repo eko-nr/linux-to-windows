@@ -2,14 +2,14 @@
 set -euo pipefail
 
 # ====== Configurable parameters ======
-BANTIME="3600"      # seconds (default 1 hour)
-FINDTIME="600"      # seconds (10 minutes)
+BANTIME="-1"        # -1 = permanent ban
+FINDTIME="6000"      # seconds (10 minutes window)
 MAXRETRY="5"        # allowed failures
-DESTEMAIL=""        # set your email for alerts, or leave blank
+DESTEMAIL=""        # optional: set email for alerts, or leave blank
 SENDER="fail2ban@$(hostname -f || echo localhost)"
 # =====================================
 
-echo "== Fail2Ban-only SSH protection setup =="
+echo "== Fail2Ban permanent SSH protection setup =="
 
 # Detect current SSH client IP
 CURRENT_SSH_IP=""
@@ -20,7 +20,7 @@ fi
 if [ -n "$CURRENT_SSH_IP" ]; then
   echo "Detected current SSH IP: $CURRENT_SSH_IP (will be whitelisted)"
 else
-  echo "No SSH client IP detected (running locally or via console)."
+  echo "No SSH client IP detected (probably local/console run)."
 fi
 
 echo "[1/4] Installing Fail2Ban..."
@@ -28,7 +28,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt update -y
 apt install -y fail2ban mailutils sendmail || true
 
-echo "[2/4] Backing up existing config..."
+echo "[2/4] Backing up old config..."
 if [ -f /etc/fail2ban/jail.local ]; then
   cp /etc/fail2ban/jail.local /etc/fail2ban/jail.local.bak_$(date +%F_%T)
   echo "Backup saved as jail.local.bak_*"
@@ -55,7 +55,7 @@ cat >/etc/fail2ban/jail.local <<EOF
 $IGNORELINE
 
 # Ban configuration
-bantime  = $BANTIME
+bantime  = $BANTIME        # -1 means permanent ban
 findtime = $FINDTIME
 maxretry = $MAXRETRY
 
@@ -77,10 +77,10 @@ systemctl enable --now fail2ban
 systemctl restart fail2ban
 
 echo
-echo "✅ Setup complete! Fail2Ban is now protecting SSH."
+echo "✅ Setup complete — permanent ban enabled."
 echo
 echo "Service status:"
-systemctl --no-pager --full status fail2ban | grep -E "Active|Loaded"
+systemctl --no-pager --full status fail2ban | grep -E 'Active|Loaded'
 echo
 echo "Check jail status:"
 sudo fail2ban-client status sshd
@@ -88,10 +88,14 @@ echo
 echo "📘 Useful commands:"
 echo " - View logs:            sudo tail -f /var/log/fail2ban.log"
 echo " - Check jail:           sudo fail2ban-client status sshd"
-echo " - Unban an IP:          sudo fail2ban-client set sshd unbanip <IP>"
-echo " - Add whitelist IP:     sudo sed -i '/^ignoreip/ s/$/ <IP>/' /etc/fail2ban/jail.local && sudo systemctl restart fail2ban"
+echo " - See banned IPs:       sudo fail2ban-client status sshd"
+echo " - Unban IP manually:    sudo fail2ban-client set sshd unbanip <IP>"
+echo " - Add whitelist IP:     sudo sed -i '/^ignoreip/ s/\$ / <IP>/' /etc/fail2ban/jail.local && sudo systemctl restart fail2ban"
+echo
+echo "⚠️  WARNING: Once banned, IPs stay blocked FOREVER until manually unbanned."
+echo "Make sure your trusted IPs are added to ignoreip above!"
 echo
 echo "Testing tip:"
-echo "  From another IP, try wrong password $MAXRETRY times — that IP should be banned for $BANTIME seconds."
+echo "  Try wrong password $MAXRETRY times from another IP — that IP will be banned permanently."
 echo
 echo "== Done =="
