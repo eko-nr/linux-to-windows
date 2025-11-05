@@ -668,6 +668,8 @@ sudo virt-install \
   --disk "${VIRTIO_LINK}",device=cdrom \
   --disk "${FLOPPY_IMG}",device=floppy \
   --check path_in_use=off \
+  --features hyperv_relaxed=on,hyperv_vapic=on,hyperv_spinlocks=on,hyperv_spinlocks_retries=8191 \
+  --clock hypervclock_present=yes \
   --tpm backend.type=emulator,model=tpm-crb \
   --rng device=/dev/urandom \
   --noautoconsole
@@ -852,6 +854,8 @@ done
 # Re-enable exit on error
 set -e
 
+echo ""
+
 # Check final status
 if [[ "$IP_DETECTED" == "true" ]]; then
   echo "✅ Network initialization successful"
@@ -904,6 +908,7 @@ echo "  ✓ KVM hardware virtualization"
 echo "  ✓ VirtIO drivers (network + storage)"
 echo "  ✓ Host CPU passthrough"
 echo "  ✓ vhost-net acceleration + multiqueue (${VCPU_COUNT})"
+echo "  ✓ Hyper-V enlightenments"
 echo ""
 echo -e "${BLUE}Cached Files:${NC}"
 echo "  Windows ISO: ${ISO_FILE}"
