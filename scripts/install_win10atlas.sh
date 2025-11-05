@@ -131,7 +131,6 @@ echo "✓ Using base public port: $RDP_PORT"
 read -p "Swap size in GB [4]: " SWAP_SIZE
 SWAP_SIZE=${SWAP_SIZE:-4}
 (( SWAP_SIZE < 1 )) && SWAP_SIZE=1
-(( SWAP_SIZE > 16 )) && SWAP_SIZE=16
 echo "Allocated Swap: ${SWAP_SIZE} GB"
 
 # --- Dependencies ---
