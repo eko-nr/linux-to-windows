@@ -701,29 +701,6 @@ echo "🧩 Forcing boot order: hard disk first"
 sudo virt-xml "${VM_NAME}" --edit --boot hd,cdrom || true
 ok "Boot order set to HDD first"
 
-# --- Configure Huge Pages ---
-echo "⚡ Configuring huge pages for better memory performance..."
-HUGEPAGES_NEEDED=$(( (RAM_SIZE / 2) + 256 ))
-AVAILABLE_MEM_MB=$(free -m | awk '/^Mem:/ {print $7}')
-MAX_HUGEPAGES=$(( (AVAILABLE_MEM_MB - 512) / 2 ))
-if (( HUGEPAGES_NEEDED > MAX_HUGEPAGES )); then
-  warn "Not enough free memory for ${HUGEPAGES_NEEDED} huge pages"; SKIP_HUGEPAGES=true
-else
-  CURRENT_HUGEPAGES=$(cat /proc/sys/vm/nr_hugepages 2>/dev/null || echo 0)
-  if (( CURRENT_HUGEPAGES < HUGEPAGES_NEEDED )); then
-    echo ${HUGEPAGES_NEEDED} | sudo tee /proc/sys/vm/nr_hugepages >/dev/null
-    ACTUAL_HUGEPAGES=$(cat /proc/sys/vm/nr_hugepages)
-    if (( ACTUAL_HUGEPAGES < HUGEPAGES_NEEDED )); then warn "Could only allocate ${ACTUAL_HUGEPAGES} huge pages"; SKIP_HUGEPAGES=true
-    else
-      grep -q "vm.nr_hugepages" /etc/sysctl.conf 2>/dev/null \
-        && sudo sed -i "s/^vm.nr_hugepages=.*/vm.nr_hugepages=${HUGEPAGES_NEEDED}/" /etc/sysctl.conf \
-        || echo "vm.nr_hugepages=${HUGEPAGES_NEEDED}" | sudo tee -a /etc/sysctl.conf >/dev/null
-      ok "Huge pages configured: ${ACTUAL_HUGEPAGES}"; SKIP_HUGEPAGES=false
-    fi
-  else ok "Huge pages already configured: ${CURRENT_HUGEPAGES}"; SKIP_HUGEPAGES=false
-  fi
-fi
-
 # --- Load vhost_net module ---
 echo "🔧 Checking for vhost_net module..."
 if ! lsmod | grep -q vhost_net; then
@@ -745,13 +722,6 @@ sleep 2
 # --- Enable vhost accelerator and multiqueue ---
 echo "⚙️  Enabling vhost accelerator and multiqueue (${VCPU_COUNT} queues)..."
 sudo virt-xml "${VM_NAME}" --edit --network driver_name=vhost,driver_queues="${VCPU_COUNT}" 2>/dev/null || warn "Failed to set vhost, continuing..."
-
-# --- Enable Huge Pages for VM ---
-if [[ "${SKIP_HUGEPAGES:-true}" == "false" ]]; then
-  echo "💾 Enabling huge pages for VM..."
-  sudo virt-xml "${VM_NAME}" --edit --memorybacking hugepages=on 2>/dev/null || warn "Failed to set huge pages, continuing..."
-  ok "Huge pages enabled for VM"
-fi
 
 # --- Start VM ---
 header "Starting Windows Installation"
@@ -939,11 +909,6 @@ echo "  ✓ KVM hardware virtualization"
 echo "  ✓ VirtIO drivers (network + storage)"
 echo "  ✓ Host CPU passthrough"
 echo "  ✓ vhost-net acceleration + multiqueue (${VCPU_COUNT})"
-if [[ "${SKIP_HUGEPAGES:-true}" == "false" ]]; then
-  echo "  ✓ Huge pages enabled"
-else
-  echo "  ○ Huge pages skipped (insufficient memory)"
-fi
 echo "  ✓ Hyper-V enlightenments"
 echo ""
 echo -e "${BLUE}Cached Files:${NC}"

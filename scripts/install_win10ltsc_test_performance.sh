@@ -712,7 +712,6 @@ echo "🧩 Forcing boot order: hard disk first"
 sudo virt-xml "${VM_NAME}" --edit --boot hd,cdrom || true
 ok "Boot order set to HDD first"
 
-
 # --- Load vhost_net module ---
 echo "🔧 Checking for vhost_net module..."
 if ! lsmod | grep -q vhost_net; then
@@ -735,12 +734,6 @@ sleep 2
 echo "⚙️  Enabling vhost accelerator and multiqueue (${VCPU_COUNT} queues)..."
 sudo virt-xml "${VM_NAME}" --edit --network driver_name=vhost,driver_queues="${VCPU_COUNT}" 2>/dev/null || warn "Failed to set vhost, continuing..."
 
-# --- Enable Huge Pages for VM ---
-if [[ "${SKIP_HUGEPAGES:-true}" == "false" ]]; then
-  echo "💾 Enabling huge pages for VM..."
-  sudo virt-xml "${VM_NAME}" --edit --memorybacking hugepages=on 2>/dev/null || warn "Failed to set huge pages, continuing..."
-  ok "Huge pages enabled for VM"
-fi
 
 # [OPTIMIZATION] CPU pinning for stability (best effort)
 echo "🧠 Applying CPU pinning for vCPUs..."
@@ -929,11 +922,6 @@ echo "  ✓ KVM hardware virtualization"
 echo "  ✓ VirtIO drivers (network + storage)"
 echo "  ✓ Host CPU passthrough"
 echo "  ✓ vhost-net acceleration + multiqueue (${VCPU_COUNT})"
-if [[ "${SKIP_HUGEPAGES:-true}" == "false" ]]; then
-  echo "  ✓ Huge pages enabled"
-else
-  echo "  ○ Huge pages skipped (insufficient memory)"
-fi
 echo "  ✓ VirtIO GPU (3D accel ON) [virtual]"  # [OPTIMIZATION]
 echo "  ✓ Disk cache=writeback + aio=native"    # [OPTIMIZATION]
 echo "  ✓ CPU pinning applied"                 # [OPTIMIZATION]
