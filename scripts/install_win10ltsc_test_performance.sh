@@ -712,28 +712,6 @@ echo "🧩 Forcing boot order: hard disk first"
 sudo virt-xml "${VM_NAME}" --edit --boot hd,cdrom || true
 ok "Boot order set to HDD first"
 
-# --- Configure Huge Pages (optional, best-effort) ---
-echo "⚡ Configuring huge pages for better memory performance..."
-HUGEPAGES_NEEDED=$(( (RAM_SIZE / 2) + 256 ))
-AVAILABLE_MEM_MB=$(free -m | awk '/^Mem:/ {print $7}')
-MAX_HUGEPAGES=$(( (AVAILABLE_MEM_MB - 512) / 2 ))
-if (( HUGEPAGES_NEEDED > MAX_HUGEPAGES )); then
-  warn "Not enough free memory for ${HUGEPAGES_NEEDED} huge pages"; SKIP_HUGEPAGES=true
-else
-  CURRENT_HUGEPAGES=$(cat /proc/sys/vm/nr_hugepages 2>/dev/null || echo 0)
-  if (( CURRENT_HUGEPAGES < HUGEPAGES_NEEDED )); then
-    echo ${HUGEPAGES_NEEDED} | sudo tee /proc/sys/vm/nr_hugepages >/dev/null
-    ACTUAL_HUGEPAGES=$(cat /proc/sys/vm/nr_hugepages)
-    if (( ACTUAL_HUGEPAGES < HUGEPAGES_NEEDED )); then warn "Could only allocate ${ACTUAL_HUGEPAGES} huge pages"; SKIP_HUGEPAGES=true
-    else
-      grep -q "vm.nr_hugepages" /etc/sysctl.conf 2>/dev/null \
-        && sudo sed -i "s/^vm.nr_hugepages=.*/vm.nr_hugepages=${HUGEPAGES_NEEDED}/" /etc/sysctl.conf \
-        || echo "vm.nr_hugepages=${HUGEPAGES_NEEDED}" | sudo tee -a /etc/sysctl.conf >/dev/null
-      ok "Huge pages configured: ${ACTUAL_HUGEPAGES}"; SKIP_HUGEPAGES=false
-    fi
-  else ok "Huge pages already configured: ${CURRENT_HUGEPAGES}"; SKIP_HUGEPAGES=false
-  fi
-fi
 
 # --- Load vhost_net module ---
 echo "🔧 Checking for vhost_net module..."
