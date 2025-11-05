@@ -80,7 +80,7 @@ while true; do
   else warn "Passwords don't match! Try again."; fi
 done
 
-read -p "Computer name [WIN10-NEON]: " WIN_COMPUTERNAME
+read -p "Computer name [WIN10-LTSC]: " WIN_COMPUTERNAME
 WIN_COMPUTERNAME=${WIN_COMPUTERNAME:-WIN10-VM}
 
 # --- VM Config ---
