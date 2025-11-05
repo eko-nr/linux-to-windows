@@ -541,21 +541,22 @@ cat > "$AUTOUNATTEND_DIR/autounattend.xml" << 'XMLEOF'
 
         <SynchronousCommand wcm:action="add">
           <Order>12</Order>
-          <CommandLine>cmd /c shutdown /r /t 15 /c "Hyper-V disabled, rebooting..."</CommandLine>
-          <Description>Reboot after disabling Hyper-V</Description>
-        </SynchronousCommand>
-
-        <SynchronousCommand wcm:action="add">
-          <Order>13</Order>
           <CommandLine>cmd /c dism /Online /Disable-Feature /FeatureName:Microsoft-Hyper-V-All /NoRestart</CommandLine>
           <Description>Remove Hyper-V Feature (Optional)</Description>
         </SynchronousCommand>
 
         <SynchronousCommand wcm:action="add">
-          <Order>14</Order>
-          <CommandLine>cmd /c reg add "HKLM\SYSTEM\CurrentControlSet\Control\CrashControl" /v AutoReboot /t REG_DWORD /d 0 /f</CommandLine>
-          <Description>Disable Automatic Restart on System Failure</Description>
+          <Order>13</Order>
+          <CommandLine>cmd /c shutdown /r /t 15 /c "Hyper-V disabled, rebooting..."</CommandLine>
+          <Description>Reboot after disabling Hyper-V</Description>
         </SynchronousCommand>
+
+        <SynchronousCommand wcm:action="add">
+          <Order>14</Order>
+          <CommandLine>powershell.exe -ExecutionPolicy Bypass -Command "reg add 'HKLM\Software\Policies\Microsoft\Windows\WindowsUpdate\AU' /v NoAutoRebootWithLoggedOnUsers /t REG_DWORD /d 1 /f; reg add 'HKLM\Software\Policies\Microsoft\Windows\WindowsUpdate\AU' /v RebootRelaunchTimeoutEnabled /t REG_DWORD /d 0 /f; reg add 'HKLM\Software\Policies\Microsoft\Windows\WindowsUpdate\AU' /v AlwaysAutoRebootAtScheduledTime /t REG_DWORD /d 0 /f; schtasks /Change /TN '\Microsoft\Windows\TaskScheduler\Maintenance Configurator' /DISABLE; schtasks /Change /TN '\Microsoft\Windows\TaskScheduler\Regular Maintenance' /DISABLE; schtasks /Change /TN '\Microsoft\Windows\UpdateOrchestrator\Reboot' /DISABLE; schtasks /Change /TN '\Microsoft\Windows\UpdateOrchestrator\Schedule Retry' /DISABLE; schtasks /Change /TN '\Microsoft\Windows\UpdateOrchestrator\Schedule Maintenance Work' /DISABLE"</CommandLine>
+          <Description>Disable Windows Update and Maintenance Auto Restart</Description>
+        </SynchronousCommand>
+      </FirstLogonCommands>
 
       </FirstLogonCommands>
     </component>
