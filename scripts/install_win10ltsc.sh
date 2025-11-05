@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# Windows 10 LTSC UNATTENDED Installer for Debian 12+ / Ubuntu 22+
+# Windows 10 Ltsc UNATTENDED Installer for Debian 12+ / Ubuntu 22+
 # Full automation with reboot handling (FIXED windowsPE parsing)
 # ============================================================
 
@@ -80,7 +80,7 @@ while true; do
   else warn "Passwords don't match! Try again."; fi
 done
 
-read -p "Computer name [WIN10-LTSC]: " WIN_COMPUTERNAME
+read -p "Computer name [WIN10-NEON]: " WIN_COMPUTERNAME
 WIN_COMPUTERNAME=${WIN_COMPUTERNAME:-WIN10-VM}
 
 # --- VM Config ---
@@ -282,7 +282,7 @@ fi
 
 # --- Ensure Windows ISO ---
 if [[ ! -f "$ISO_FILE" || $(stat -c%s "$ISO_FILE" 2>/dev/null || echo 0) -lt 1000000000 ]]; then
-  step "Downloading Windows 10 LTSC ISO..."
+  step "Downloading Windows 10 Ltsc ISO..."
   sudo wget -O "$ISO_FILE" "https://archive.org/download/windows10ltsc/windows_10_enterprise_ltsc_2019_x64_dvd_5795bb03.iso"
 else
   ok "Using cached ISO: $ISO_FILE"
@@ -527,7 +527,6 @@ cat > "$AUTOUNATTEND_DIR/autounattend.xml" << 'XMLEOF'
     </component>
   </settings>
 </unattend>
-
 XMLEOF
 
 # Replace placeholders with escaped values
@@ -653,6 +652,8 @@ sudo virt-install \
   --disk "${VIRTIO_LINK}",device=cdrom \
   --disk "${FLOPPY_IMG}",device=floppy \
   --check path_in_use=off \
+  --features hyperv_relaxed=on,hyperv_vapic=on,hyperv_spinlocks=on,hyperv_spinlocks_retries=8191 \
+  --clock hypervclock_present=yes \
   --tpm backend.type=emulator,model=tpm-crb \
   --rng device=/dev/urandom \
   --noautoconsole
@@ -799,7 +800,6 @@ while (( CHECK_COUNT < MAX_CHECKS )); do
 done
 
 sleep 10
-
 # Wait for VM to fully boot and get IP
 echo "⏳ Waiting for VM network initialization..."
 echo "   (This may take 30-60 seconds for Windows to boot and get IP address)"
@@ -882,7 +882,7 @@ fi
 echo ""
 if [[ "$INSTALL_COMPLETE" == "true" ]]; then
   header "Installation Complete!"
-  ok "Windows 10 LTSC installed successfully!"
+  ok "Windows 10 Ltsc installed successfully!"
   echo ""
   echo -e "${BLUE}VM Details:${NC}"
   echo "  Name: ${VM_NAME}"
