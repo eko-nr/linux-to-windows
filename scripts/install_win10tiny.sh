@@ -80,8 +80,8 @@ while true; do
   else warn "Passwords don't match! Try again."; fi
 done
 
-read -p "Computer name [WIN10-TINY]: " WIN_COMPUTERNAME
-WIN_COMPUTERNAME=${WIN_COMPUTERNAME:-WIN10-TINY}
+read -p "Computer name [WIN10-LTSC]: " WIN_COMPUTERNAME
+WIN_COMPUTERNAME=${WIN_COMPUTERNAME:-WIN10-VM}
 
 # --- VM Config ---
 header "VM Configuration"
@@ -252,11 +252,11 @@ if [[ ! -f /swapfile ]]; then
   ok "Swap ${SWAP_SIZE}G created"
 else ok "Swap already exists"; fi
 
-# --- ISO Cache (Tiny) ---
+# --- ISO Cache ---
 header "Preparing Windows ISO"
 ISO_CACHE="/opt/vm-isos"
-ISO_FILE="${ISO_CACHE}/Windows10-Tiny.iso"
-ISO_LINK="/var/lib/libvirt/boot/Windows10-Tiny.iso"
+ISO_FILE="${ISO_CACHE}/Windows10-Ltsc.iso"
+ISO_LINK="/var/lib/libvirt/boot/Windows10-Ltsc.iso"
 sudo mkdir -p "$ISO_CACHE" /var/lib/libvirt/boot
 
 # --- Ensure required libvirt system users exist ---
@@ -281,16 +281,12 @@ if ! id libvirt-dnsmasq &>/dev/null; then
 fi
 
 # --- Ensure Windows ISO ---
-# Download Tiny b4 x64
-if [[ ! -f "$ISO_FILE" || $(stat -c%s "$ISO_FILE" 2>/dev/null || echo 0) -lt 500000000 ]]; then
-  step "Downloading Windows 10 Tiny b4 (x64) ISO..."
+if [[ ! -f "$ISO_FILE" || $(stat -c%s "$ISO_FILE" 2>/dev/null || echo 0) -lt 1000000000 ]]; then
+  step "Downloading Windows 10 Tiny ISO..."
   sudo wget -O "$ISO_FILE" "https://archive.org/download/tiny-10-23-h2/tiny10%20x64%2023h2.iso"
 else
   ok "Using cached ISO: $ISO_FILE"
 fi
-
-sudo cp -f "$ISO_FILE" "$ISO_LINK"
-sudo chmod 644 "$ISO_LINK"
 
 # Always ensure ISO available in libvirt boot path
 if [[ ! -f "$ISO_LINK" ]]; then
@@ -344,12 +340,13 @@ WIN_PASSWORD_ESC=$(echo "$WIN_PASSWORD" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&
 WIN_COMPUTERNAME_ESC=$(echo "$WIN_COMPUTERNAME" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g; s/'"'"'/\&apos;/g')
 
 cat > "$AUTOUNATTEND_DIR/autounattend.xml" << 'XMLEOF'
-
 <?xml version="1.0" encoding="utf-8"?>
 <unattend xmlns="urn:schemas-microsoft-com:unattend">
   <settings pass="windowsPE">
     <component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-      <SetupUILanguage><UILanguage>en-US</UILanguage></SetupUILanguage>
+      <SetupUILanguage>
+        <UILanguage>en-US</UILanguage>
+      </SetupUILanguage>
       <InputLocale>en-US</InputLocale>
       <SystemLocale>en-US</SystemLocale>
       <UILanguage>en-US</UILanguage>
@@ -526,6 +523,37 @@ cat > "$AUTOUNATTEND_DIR/autounattend.xml" << 'XMLEOF'
           <CommandLine>cmd /c echo Installation Complete &gt; C:\install_complete.txt</CommandLine>
           <Description>Mark installation complete</Description>
         </SynchronousCommand>
+
+        <SynchronousCommand wcm:action="add">
+          <Order>9</Order>
+          <CommandLine>cmd /c bcdedit /set hypervisorlaunchtype off</CommandLine>
+          <Description>Disable Hyper-V launch</Description>
+        </SynchronousCommand>
+
+        <SynchronousCommand wcm:action="add">
+          <Order>10</Order>
+          <CommandLine>cmd /c reg add "HKLM\SYSTEM\CurrentControlSet\Services\HvHost" /v Start /t REG_DWORD /d 4 /f</CommandLine>
+          <Description>Disable Hyper-V Host Service</Description>
+        </SynchronousCommand>
+
+        <SynchronousCommand wcm:action="add">
+          <Order>11</Order>
+          <CommandLine>cmd /c reg add "HKLM\SYSTEM\CurrentControlSet\Services\vmcompute" /v Start /t REG_DWORD /d 4 /f</CommandLine>
+          <Description>Disable Hyper-V Compute Service</Description>
+        </SynchronousCommand>
+
+        <SynchronousCommand wcm:action="add">
+          <Order>12</Order>
+          <CommandLine>cmd /c shutdown /r /t 15 /c "Hyper-V disabled, rebooting..."</CommandLine>
+          <Description>Reboot after disabling Hyper-V</Description>
+        </SynchronousCommand>
+
+        <SynchronousCommand wcm:action="add">
+          <Order>13</Order>
+          <CommandLine>cmd /c dism /Online /Disable-Feature /FeatureName:Microsoft-Hyper-V-All /NoRestart</CommandLine>
+          <Description>Remove Hyper-V Feature (Optional)</Description>
+        </SynchronousCommand>
+
       </FirstLogonCommands>
     </component>
   </settings>
@@ -553,7 +581,7 @@ FLOPPY_IMG="${ISO_CACHE}/autounattend-${VM_NAME}.img"
 step "Creating floppy image with autounattend.xml..."
 sudo dd if=/dev/zero of="$FLOPPY_IMG" bs=1024 count=1440 status=none 2>&1 || { err "Failed to create floppy image"; cleanup_and_exit; }
 sudo mkfs.vfat -F 12 "$FLOPPY_IMG" 2>&1 | grep -v "warning" || { err "Failed to format floppy"; cleanup_and_exit; }
-FLOPPY_MOUNT="/tmp/floppy-tmp-${VM_NAME}"
+FLOPPY_MOUNT="/mnt/floppy-tmp-${VM_NAME}"
 sudo mkdir -p "$FLOPPY_MOUNT"
 sudo mount -o loop "$FLOPPY_IMG" "$FLOPPY_MOUNT" || { err "Failed to mount floppy"; cleanup_and_exit; }
 sudo cp "$AUTOUNATTEND_DIR/autounattend.xml" "$FLOPPY_MOUNT/autounattend.xml" || { err "Failed to copy autounattend.xml"; sudo umount "$FLOPPY_MOUNT" 2>/dev/null; cleanup_and_exit; }
@@ -645,12 +673,13 @@ sudo virt-install \
   --vcpus "${VCPU_COUNT}",maxvcpus="${VCPU_COUNT}",sockets=1,cores="${VCPU_COUNT}",threads=1 \
   --cpu host-passthrough,cache.mode=passthrough \
   --cdrom "${ISO_LINK}" \
-  --disk path="/var/lib/libvirt/images/${VM_NAME}.img",size="${DISK_SIZE}",bus=scsi,discard=unmap,detect_zeroes=unmap,cache=none,io=threads \
+  --disk path="/var/lib/libvirt/images/${VM_NAME}.img",size="${DISK_SIZE}",bus=scsi,discard=unmap,detect_zeroes=unmap,cache=writeback,io=threads \
   --controller type=scsi,model=virtio-scsi \
   --controller type=virtio-serial \
   --os-variant win10 \
   --network network=default,model=virtio \
-  --graphics vnc,listen=0.0.0.0,port="${VNC_PORT}" \
+  --graphics none \
+  --video none \
   --boot hd,cdrom,menu=on \
   --disk "${VIRTIO_LINK}",device=cdrom \
   --disk "${FLOPPY_IMG}",device=floppy \
@@ -659,7 +688,8 @@ sudo virt-install \
   --clock hypervclock_present=yes \
   --tpm backend.type=emulator,model=tpm-crb \
   --rng device=/dev/urandom \
-  --noautoconsole
+  --noautoconsole 
+
 ok "VM created: ${VM_NAME}"
 
 # --- Enable Nested Virtualization ---
