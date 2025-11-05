@@ -111,10 +111,11 @@ SWAP_SIZE=$(( TOTAL_RAM_GB * 35 / 100 ))
 echo "Allocated Swap (auto): ${SWAP_SIZE} GB (~35% of RAM)"
 
 # --- SAFE ISO SIZE FALLBACKS ---
+ISO_CACHE="/opt/vm-isos"
+
 VIRTIO_FILE="${ISO_CACHE}/virtio-win.iso"
 VIRTIO_LINK="/var/lib/libvirt/boot/virtio-win.iso"
 
-ISO_CACHE="/opt/vm-isos"
 ISO_FILE="${ISO_CACHE}/Windows10-Ltsc.iso"
 ISO_LINK="/var/lib/libvirt/boot/Windows10-Ltsc.iso"
 
