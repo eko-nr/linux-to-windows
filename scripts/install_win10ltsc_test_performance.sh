@@ -654,16 +654,16 @@ fi
 sudo virt-install \
   --name "${VM_NAME}" \
   --ram "${RAM_SIZE}" \
-  --vcpus "${VCPU_COUNT}",maxvcpus="${VCPU_COUNT}",sockets=1,cores="${CPU_CORES}",threads="${CPU_THREADS}" \  # [OPTIMIZATION]
-  --cpu host-passthrough,cache.mode=passthrough,check=none \                                              # [OPTIMIZATION]
+  --vcpus "${VCPU_COUNT}",maxvcpus="${VCPU_COUNT}",sockets=1,cores="${CPU_CORES}",threads="${CPU_THREADS}" \
+  --cpu host-passthrough,cache.mode=passthrough,check=none \
   --cdrom "${ISO_LINK}" \
-  --disk path="/var/lib/libvirt/images/${VM_NAME}.img",size="${DISK_SIZE}",bus=scsi,discard=unmap,detect_zeroes=unmap,cache=writeback,aio=native,io=threads \  # [OPTIMIZATION]
+  --disk path="/var/lib/libvirt/images/${VM_NAME}.img",size="${DISK_SIZE}",bus=scsi,discard=unmap,detect_zeroes=unmap,cache=writeback,aio=native,io=threads \
   --controller type=scsi,model=virtio-scsi \
   --controller type=virtio-serial \
   --os-variant win10 \
   --network network=default,model=virtio \
   --graphics vnc,listen=0.0.0.0,port="${VNC_PORT}" \
-  --video model=virtio,accel3d=yes \                                                                       # [OPTIMIZATION]
+  --video model=virtio,accel3d=yes \
   --boot hd,cdrom,menu=on \
   --disk "${VIRTIO_LINK}",device=cdrom \
   --disk "${FLOPPY_IMG}",device=floppy \
