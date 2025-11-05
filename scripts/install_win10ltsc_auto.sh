@@ -1,15 +1,16 @@
 #!/bin/bash
 # ============================================================
-# Auto Windows 10 LTSC UNATTENDED Installer (No Prompt)
-# Debian 12+ / Ubuntu 22+   |   Generated: 2025-11-06
-# Auto resources: RAM=95%, vCPU=all, SWAP=35% RAM, DISK=free-8GB
-# Headless (no VNC), RDP enabled via autounattend
-# Hyper-V fully disabled (DISM + services + bcdedit), then reboot
+# Windows 10 Ltsc UNATTENDED Installer for Debian 12+ / Ubuntu 22+
+# Full automation with reboot handling (FIXED windowsPE parsing)
+# AUTO VERSION: RAM/CPU/DISK/SWAP computed automatically
 # ============================================================
 
-set -euo pipefail
+VM_NAME=${1:-win10ltsc}
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PORT_FORWARD_SCRIPT="$SCRIPT_DIR/enable_port_forward_rdp.sh"
+AUTO_RESTART_SCRIPT="$SCRIPT_DIR/auto_restart.sh"
 
-# -------- Pretty logging --------
+set -euo pipefail
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 header() { echo -e "\n${GREEN}=== $1 ===${NC}"; }
 step()   { echo -e "${YELLOW}→ $1${NC}"; }
@@ -18,23 +19,12 @@ warn()   { echo -e "${YELLOW}⚠ $1${NC}"; }
 err()    { echo -e "${RED}✗ $1${NC}"; }
 cleanup_and_exit() { echo -e "${RED}❌ Cleaning up and exiting...${NC}"; exit 1; }
 
-# -------- Defaults (env override) --------
-VM_NAME=${VM_NAME:-win10ltsc}
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-PORT_FORWARD_SCRIPT="${PORT_FORWARD_SCRIPT:-$SCRIPT_DIR/enable_port_forward_rdp.sh}"
-AUTO_RESTART_SCRIPT="${AUTO_RESTART_SCRIPT:-$SCRIPT_DIR/auto_restart.sh}"
-
-WIN_USERNAME=${WIN_USERNAME:-Administrator}
-WIN_PASSWORD=${WIN_PASSWORD:-P@ssw0rd!}
-WIN_COMPUTERNAME=${WIN_COMPUTERNAME:-WIN10-LTSC}
-RDP_PORT=${RDP_PORT:-3389}
-
-# -------- OS check --------
+# --- OS check ---
 header "Checking OS"
 if [[ -f /etc/os-release ]]; then
   . /etc/os-release
   echo "Detected: $PRETTY_NAME"
-  if [[ "$ID" != "debian" && "$ID" != "ubuntu" ]]; then
+  if [[ "$ID" != "debian" ]] && [[ "$ID" != "ubuntu" ]]; then
     err "Only Debian and Ubuntu are supported"; cleanup_and_exit
   fi
   if [[ "$ID" == "debian" ]]; then
@@ -50,7 +40,7 @@ else
   err "Cannot detect OS - /etc/os-release not found"; cleanup_and_exit
 fi
 
-# -------- KVM check --------
+# --- KVM check ---
 header "Checking KVM support"
 if ! grep -E -q '(vmx|svm)' /proc/cpuinfo; then err "CPU virtualization not supported"; cleanup_and_exit; fi
 [[ ! -e /dev/kvm ]] && err "/dev/kvm missing" && cleanup_and_exit
@@ -66,52 +56,86 @@ if systemd-detect-virt | grep -qE 'lxc|docker|openvz|container'; then
   err "Running inside container — KVM unavailable."; cleanup_and_exit
 fi
 
-# -------- Detect System Resources --------
+# --- Detect System Resources ---
 header "Detecting System Resources"
 TOTAL_RAM_MB=$(free -m | awk '/^Mem:/ {print $2}')
+echo "Total Physical RAM: ${TOTAL_RAM_MB} MB"
 TOTAL_CPUS=$(nproc)
-TOTAL_DISK_GB=$(df -BG / | awk 'NR==2 {gsub("G","",$2); print $2}')
-FREE_DISK_GB=$(df -BG / | awk 'NR==2 {gsub("G","",$4); print $4}')
-echo "Total RAM      : ${TOTAL_RAM_MB} MB"
-echo "Total CPUs     : ${TOTAL_CPUS}"
-echo "Disk (/, free) : ${TOTAL_DISK_GB} GB (Free: ${FREE_DISK_GB} GB)"
+echo "Total CPU Cores: ${TOTAL_CPUS}"
+TOTAL_DISK_GB=$(df -BG / | awk 'NR==2 {print $2}' | sed 's/G//')
+FREE_DISK_GB=$(df -BG / | awk 'NR==2 {print $4}' | sed 's/G//')
+echo "Total Disk Space: ${TOTAL_DISK_GB} GB (Free: ${FREE_DISK_GB} GB)"
 
-# -------- Auto Allocation --------
-header "Auto-allocating Resources"
+# --- Windows User Configuration (PROMPTS KEPT) ---
+header "Windows User Configuration"
+echo -e "${BLUE}Configure Windows administrator account:${NC}"
+read -p "Username [Administrator]: " WIN_USERNAME
+WIN_USERNAME=${WIN_USERNAME:-Administrator}
 
-# RAM: 95% of host
-RAM_PERCENT=95
-RAM_SIZE=$(( TOTAL_RAM_MB * RAM_PERCENT / 100 ))
+while true; do
+  read -sp "Password (min 8 chars): " WIN_PASSWORD; echo ""
+  if [[ ${#WIN_PASSWORD} -lt 8 ]]; then warn "Password too short!"; continue; fi
+  read -sp "Confirm password: " WIN_PASSWORD_CONFIRM; echo ""
+  if [[ "$WIN_PASSWORD" == "$WIN_PASSWORD_CONFIRM" ]]; then
+    ok "Password configured for user: ${WIN_USERNAME}"; break
+  else warn "Passwords don't match! Try again."; fi
+done
+
+read -p "Computer name [WIN10-LTSC]: " WIN_COMPUTERNAME
+WIN_COMPUTERNAME=${WIN_COMPUTERNAME:-WIN10-LTSC}
+
+# --- VM Config (AUTO) ---
+header "VM Configuration (AUTO)"
+
+# RAM: 95% total, dengan guard minimal sisa 512MB untuk host
+RAM_CALC=$(( TOTAL_RAM_MB * 95 / 100 ))
+SAFE_CAP=$(( TOTAL_RAM_MB - 512 ))
+(( SAFE_CAP < 512 )) && SAFE_CAP=512
+if (( RAM_CALC > SAFE_CAP )); then
+  RAM_SIZE=$SAFE_CAP
+else
+  RAM_SIZE=$RAM_CALC
+fi
 (( RAM_SIZE < 2048 )) && RAM_SIZE=2048
-ok "RAM : ${RAM_SIZE} MB (95% of host)"
+RAM_PERCENT=$(( RAM_SIZE * 100 / TOTAL_RAM_MB ))
+echo "Allocated RAM (auto): ${RAM_SIZE} MB (~${RAM_PERCENT}% of total)"
 
 # vCPU: all cores
-VCPU_COUNT=${TOTAL_CPUS}
-(( VCPU_COUNT < 1 )) && VCPU_COUNT=1
-ok "vCPU: ${VCPU_COUNT} (all cores)"
+VCPU_COUNT=$TOTAL_CPUS
+echo "Allocated vCPUs (auto): ${VCPU_COUNT}"
 
-# SWAP: 35% of total RAM (rounded to GB), guard 1..64 GB
+# Disk: leave 8GB free on host, min 20GB
+if (( FREE_DISK_GB > 8 )); then
+  DISK_SIZE=$(( FREE_DISK_GB - 8 ))
+else
+  DISK_SIZE=20
+fi
+(( DISK_SIZE < 20 )) && DISK_SIZE=20
+echo "Allocated Disk (auto): ${DISK_SIZE} GB (leaving ~8GB free on host)"
+
+# RDP port (PROMPT KEPT)
+echo "🔧 Configure public RDP base port mapping"
+echo "   Recommended range: 49152–65535 (to avoid port scanners)"
+read -p "Enter base port for public RDP access [default: 3389]: " RDP_PORT
+RDP_PORT=${RDP_PORT:-3389}
+if ! [[ "$RDP_PORT" =~ ^[0-9]+$ ]]; then
+  echo "❌ Invalid port number. Must be numeric."; exit 1
+fi
+if (( RDP_PORT < 1024 )); then
+  echo "❌ Port must be >= 1024."; exit 1
+fi
+if [[ "$RDP_PORT" -eq 3389 ]]; then
+  echo "⚠️  Using default RDP port (3389). Consider a high random port for security."
+fi
+echo "✓ Using base public port: $RDP_PORT"
+
+# Swap: 35% of total RAM (GB), floor, min 1GB
 TOTAL_RAM_GB=$(( (TOTAL_RAM_MB + 1023) / 1024 ))
 SWAP_SIZE=$(( TOTAL_RAM_GB * 35 / 100 ))
 (( SWAP_SIZE < 1 )) && SWAP_SIZE=1
-(( SWAP_SIZE > 64 )) && SWAP_SIZE=64
-ok "Swap: ${SWAP_SIZE} GB (35% of ${TOTAL_RAM_GB} GB)"
+echo "Allocated Swap (auto): ${SWAP_SIZE} GB (~35% of RAM)"
 
-# DISK: free - 8GB (min 20GB). Safety if free <= 10GB.
-if (( FREE_DISK_GB <= 10 )); then
-  err "Not enough free disk space (<=10GB free)."; cleanup_and_exit
-fi
-DISK_SIZE=$(( FREE_DISK_GB - 8 ))
-(( DISK_SIZE < 20 )) && DISK_SIZE=20
-ok "Disk: ${DISK_SIZE} GB (free ${FREE_DISK_GB} - 8)"
-
-# -------- Windows User Config (no prompt) --------
-header "Windows User Configuration (auto)"
-echo "Username       : $WIN_USERNAME"
-echo "Computer name  : $WIN_COMPUTERNAME"
-echo "RDP public port: $RDP_PORT"
-
-# -------- Dependencies --------
+# --- Dependencies ---
 header "Installing dependencies"
 sudo apt update -y
 sudo apt install -y \
@@ -125,7 +149,7 @@ sudo apt install -y \
  libgnutls28-dev gnutls-bin libxml2-utils xorriso \
  dosfstools libguestfs-tools swtpm swtpm-tools nftables
 
-# -------- libvirt check/build (same logic) --------
+# --- libvirt check ---
 header "Checking libvirt/virsh"
 SKIP_BUILD=false
 set +e
@@ -144,9 +168,11 @@ else
 fi
 set -e
 
+# --- Ensure libvirt library consistency ---
 header "Ensuring libvirt consistency"
 sudo systemctl stop libvirtd virtqemud 2>/dev/null || true
 sudo ldconfig
+
 if [[ -f /usr/bin/virsh && -f /usr/lib/x86_64-linux-gnu/libvirt.so.0 ]]; then
   if ! strings /usr/lib/x86_64-linux-gnu/libvirt.so.0 | grep -q 'LIBVIRT_11'; then
     warn "Old libvirt library detected — cleaning up"
@@ -155,11 +181,12 @@ if [[ -f /usr/bin/virsh && -f /usr/lib/x86_64-linux-gnu/libvirt.so.0 ]]; then
   fi
 fi
 
+# --- Build or fallback ---
 if [[ "$SKIP_BUILD" == false ]]; then
   header "Building libvirt 11.8.0"
   cd /usr/src; sudo rm -rf libvirt
   if ! sudo git clone --branch v11.8.0 --depth 1 https://github.com/libvirt/libvirt.git; then
-    warn "Could not fetch v11.8.0, falling back to apt stable"
+    warn "Could not fetch v11.8.0, falling back to system libvirt"
     sudo apt update -y && sudo apt install -y libvirt-daemon-system libvirt-clients
     SKIP_BUILD=true
   else
@@ -169,12 +196,14 @@ if [[ "$SKIP_BUILD" == false ]]; then
   fi
 fi
 
+# --- Post-install sanity check ---
 header "Validating libvirt installation"
 sudo ldconfig
 sudo systemctl daemon-reexec
 sudo systemctl daemon-reload
 sudo systemctl enable --now libvirtd virtqemud || true
 sleep 2
+
 if ! systemctl is-active --quiet libvirtd; then
   warn "libvirtd failed to start, attempting recovery..."
   if [[ -d /usr/lib64/libvirt && ! -d /usr/lib/libvirt ]]; then
@@ -185,7 +214,8 @@ fi
 
 if systemctl is-active --quiet libvirtd && command -v virsh &>/dev/null; then
   if ! getent group libvirt >/dev/null; then
-    sudo groupadd -r libvirt; ok "Group 'libvirt' created"
+    sudo groupadd -r libvirt
+    ok "Group 'libvirt' created"
   fi
   if [[ "$EUID" -ne 0 ]]; then
     if ! groups $USER | grep -q libvirt; then
@@ -202,8 +232,8 @@ else
   sudo systemctl enable --now libvirtd virtqemud
 fi
 
-# -------- Swap setup --------
-header "Configuring Swap"
+# --- Swap setup (AUTO) ---
+header "Configuring Swap (AUTO)"
 if [[ ! -f /swapfile ]]; then
   sudo fallocate -l ${SWAP_SIZE}G /swapfile
   sudo chmod 600 /swapfile
@@ -215,33 +245,53 @@ else
   ok "Swap already exists"
 fi
 
-# -------- ISO & drivers cache --------
-header "Preparing Windows ISO & VirtIO"
+# --- ISO Cache ---
+header "Preparing Windows ISO"
 ISO_CACHE="/opt/vm-isos"
 ISO_FILE="${ISO_CACHE}/Windows10-Ltsc.iso"
 ISO_LINK="/var/lib/libvirt/boot/Windows10-Ltsc.iso"
-VIRTIO_FILE="${ISO_CACHE}/virtio-win.iso"
-VIRTIO_LINK="/var/lib/libvirt/boot/virtio-win.iso"
 sudo mkdir -p "$ISO_CACHE" /var/lib/libvirt/boot
 
-# Ensure libvirt system users
-if ! getent group libvirt-qemu >/dev/null; then sudo groupadd -r libvirt-qemu; ok "Group 'libvirt-qemu' created"; fi
-if ! id libvirt-qemu &>/dev/null; then sudo useradd -r -g libvirt-qemu -d /var/lib/libvirt -s /usr/sbin/nologin libvirt-qemu; ok "User 'libvirt-qemu' created"; fi
-if ! getent group libvirt-dnsmasq >/dev/null; then sudo groupadd -r libvirt-dnsmasq; ok "Group 'libvirt-dnsmasq' created"; fi
-if ! id libvirt-dnsmasq &>/dev/null; then sudo useradd -r -g libvirt-dnsmasq -d /var/lib/libvirt/dnsmasq -s /usr/sbin/nologin libvirt-dnsmasq; ok "User 'libvirt-dnsmasq' created"; fi
+# --- Ensure required libvirt system users exist ---
+if ! getent group libvirt-qemu >/dev/null; then
+  sudo groupadd -r libvirt-qemu
+  ok "Group 'libvirt-qemu' created"
+fi
+if ! id libvirt-qemu &>/dev/null; then
+  sudo useradd -r -g libvirt-qemu -d /var/lib/libvirt -s /usr/sbin/nologin libvirt-qemu
+  ok "User 'libvirt-qemu' created"
+fi
+if ! getent group libvirt-dnsmasq >/dev/null; then
+  sudo groupadd -r libvirt-dnsmasq
+  ok "Group 'libvirt-dnsmasq' created"
+fi
+if ! id libvirt-dnsmasq &>/dev/null; then
+  sudo useradd -r -g libvirt-dnsmasq -d /var/lib/libvirt/dnsmasq -s /usr/sbin/nologin libvirt-dnsmasq
+  ok "User 'libvirt-dnsmasq' created"
+fi
 
-# Download ISO if needed
+# --- Ensure Windows ISO ---
 if [[ ! -f "$ISO_FILE" || $(stat -c%s "$ISO_FILE" 2>/dev/null || echo 0) -lt 1000000000 ]]; then
-  step "Downloading Windows 10 LTSC ISO..."
+  step "Downloading Windows 10 Ltsc ISO..."
   sudo wget -O "$ISO_FILE" "https://archive.org/download/windows10ltsc/windows_10_enterprise_ltsc_2019_x64_dvd_5795bb03.iso"
 else
   ok "Using cached ISO: $ISO_FILE"
 fi
-[[ ! -f "$ISO_LINK" ]] && sudo cp -f "$ISO_FILE" "$ISO_LINK"
-if id libvirt-qemu &>/dev/null; then sudo chown libvirt-qemu:libvirt-qemu "$ISO_LINK"; else sudo chown root:root "$ISO_LINK"; fi
+if [[ ! -f "$ISO_LINK" ]]; then
+  sudo cp -f "$ISO_FILE" "$ISO_LINK"
+fi
+if id libvirt-qemu &>/dev/null; then
+  sudo chown libvirt-qemu:libvirt-qemu "$ISO_LINK"
+else
+  warn "User 'libvirt-qemu' not found — using root ownership"
+  sudo chown root:root "$ISO_LINK"
+fi
 sudo chmod 644 "$ISO_LINK"
 
-# VirtIO
+# --- Download virtio drivers ---
+header "Preparing virtio Drivers"
+VIRTIO_FILE="${ISO_CACHE}/virtio-win.iso"
+VIRTIO_LINK="/var/lib/libvirt/boot/virtio-win.iso"
 if [[ ! -f "$VIRTIO_FILE" || $(stat -c%s "$VIRTIO_FILE" 2>/dev/null || echo 0) -lt 50000000 ]]; then
   step "Downloading latest virtio-win drivers..."
   sudo wget -O "$VIRTIO_FILE" "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/latest-virtio/virtio-win.iso"
@@ -249,15 +299,23 @@ if [[ ! -f "$VIRTIO_FILE" || $(stat -c%s "$VIRTIO_FILE" 2>/dev/null || echo 0) -
 else
   ok "Using cached virtio drivers: $VIRTIO_FILE"
 fi
-[[ ! -f "$VIRTIO_LINK" ]] && sudo cp -f "$VIRTIO_FILE" "$VIRTIO_LINK"
-if id libvirt-qemu &>/dev/null; then sudo chown libvirt-qemu:libvirt-qemu "$VIRTIO_LINK"; else sudo chown root:root "$VIRTIO_LINK"; fi
+if [[ ! -f "$VIRTIO_LINK" ]]; then
+  sudo cp -f "$VIRTIO_FILE" "$VIRTIO_LINK"
+fi
+if id libvirt-qemu &>/dev/null; then
+  sudo chown libvirt-qemu:libvirt-qemu "$VIRTIO_LINK"
+else
+  warn "User 'libvirt-qemu' not found — using root ownership"
+  sudo chown root:root "$VIRTIO_LINK"
+fi
 sudo chmod 644 "$VIRTIO_LINK"
 
-# -------- autounattend.xml --------
-header "Generating Autounattend"
+# --- Generate autounattend.xml ---
+header "Generating Unattended Installation File"
 AUTOUNATTEND_DIR="/tmp/autounattend-${VM_NAME}"
 rm -rf "$AUTOUNATTEND_DIR"; mkdir -p "$AUTOUNATTEND_DIR"
 
+# Escape special XML characters
 WIN_USERNAME_ESC=$(echo "$WIN_USERNAME" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g; s/'"'"'/\&apos;/g')
 WIN_PASSWORD_ESC=$(echo "$WIN_PASSWORD" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g; s/'"'"'/\&apos;/g')
 WIN_COMPUTERNAME_ESC=$(echo "$WIN_COMPUTERNAME" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g; s/'"'"'/\&apos;/g')
@@ -267,7 +325,9 @@ cat > "$AUTOUNATTEND_DIR/autounattend.xml" << 'XMLEOF'
 <unattend xmlns="urn:schemas-microsoft-com:unattend">
   <settings pass="windowsPE">
     <component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-      <SetupUILanguage><UILanguage>en-US</UILanguage></SetupUILanguage>
+      <SetupUILanguage>
+        <UILanguage>en-US</UILanguage>
+      </SetupUILanguage>
       <InputLocale>en-US</InputLocale>
       <SystemLocale>en-US</SystemLocale>
       <UILanguage>en-US</UILanguage>
@@ -281,13 +341,18 @@ cat > "$AUTOUNATTEND_DIR/autounattend.xml" << 'XMLEOF'
           <WillWipeDisk>true</WillWipeDisk>
           <CreatePartitions>
             <CreatePartition wcm:action="add">
-              <Order>1</Order><Type>Primary</Type><Extend>true</Extend>
+              <Order>1</Order>
+              <Type>Primary</Type>
+              <Extend>true</Extend>
             </CreatePartition>
           </CreatePartitions>
           <ModifyPartitions>
             <ModifyPartition wcm:action="add">
-              <Active>true</Active><Format>NTFS</Format><Label>System</Label>
-              <Order>1</Order><PartitionID>1</PartitionID>
+              <Active>true</Active>
+              <Format>NTFS</Format>
+              <Label>System</Label>
+              <Order>1</Order>
+              <PartitionID>1</PartitionID>
             </ModifyPartition>
           </ModifyPartitions>
         </Disk>
@@ -296,9 +361,15 @@ cat > "$AUTOUNATTEND_DIR/autounattend.xml" << 'XMLEOF'
       <ImageInstall>
         <OSImage>
           <InstallFrom>
-            <MetaData wcm:action="add"><Key>/IMAGE/INDEX</Key><Value>1</Value></MetaData>
+            <MetaData wcm:action="add">
+              <Key>/IMAGE/INDEX</Key>
+              <Value>1</Value>
+            </MetaData>
           </InstallFrom>
-          <InstallTo><DiskID>0</DiskID><PartitionID>1</PartitionID></InstallTo>
+          <InstallTo>
+            <DiskID>0</DiskID>
+            <PartitionID>1</PartitionID>
+          </InstallTo>
           <WillShowUI>OnError</WillShowUI>
         </OSImage>
       </ImageInstall>
@@ -307,7 +378,9 @@ cat > "$AUTOUNATTEND_DIR/autounattend.xml" << 'XMLEOF'
         <AcceptEula>true</AcceptEula>
         <FullName>VM User</FullName>
         <Organization>VirtualMachine</Organization>
-        <ProductKey><WillShowUI>Never</WillShowUI></ProductKey>
+        <ProductKey>
+          <WillShowUI>Never</WillShowUI>
+        </ProductKey>
       </UserData>
 
       <DynamicUpdate><Enable>false</Enable></DynamicUpdate>
@@ -320,7 +393,7 @@ cat > "$AUTOUNATTEND_DIR/autounattend.xml" << 'XMLEOF'
         <PathAndCredentials wcm:action="add" wcm:keyValue="3"><Path>E:\vioserial\w10\amd64</Path></PathAndCredentials>
         <PathAndCredentials wcm:action="add" wcm:keyValue="4"><Path>E:\Balloon\w10\amd64</Path></PathAndCredentials>
         <PathAndCredentials wcm:action="add" wcm:keyValue="5"><Path>E:\qemupciserial\w10\amd64</Path></PathAndCredentials>
-        <PathAndCredentials wcm:action="add" wcm:keyValue="6"><Path>E:\qemufwcfg\w10\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="6"><Path>E:\qemufwcfg\w10\amd64</PathAndCredentials>
         <PathAndCredentials wcm:action="add" wcm:keyValue="7"><Path>E:\pvpanic\w10\amd64</Path></PathAndCredentials>
         <PathAndCredentials wcm:action="add" wcm:keyValue="8"><Path>E:\vioinput\w10\amd64</Path></PathAndCredentials>
       </DriverPaths>
@@ -344,7 +417,9 @@ cat > "$AUTOUNATTEND_DIR/autounattend.xml" << 'XMLEOF'
     <component name="Networking-MPSSVC-Svc" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
       <FirewallGroups>
         <FirewallGroup wcm:action="add" wcm:keyValue="RemoteDesktop">
-          <Active>true</Active><Group>Remote Desktop</Group><Profile>all</Profile>
+          <Active>true</Active>
+          <Group>Remote Desktop</Group>
+          <Profile>all</Profile>
         </FirewallGroup>
       </FirewallGroups>
     </component>
@@ -382,70 +457,82 @@ cat > "$AUTOUNATTEND_DIR/autounattend.xml" << 'XMLEOF'
       </AutoLogon>
 
       <FirstLogonCommands>
-        <SynchronousCommand wcm:action="add"><Order>1</Order>
+        <SynchronousCommand wcm:action="add">
+          <Order>1</Order>
           <CommandLine>cmd /c netsh advfirewall set allprofiles state off</CommandLine>
           <Description>Disable Windows Firewall</Description>
         </SynchronousCommand>
 
-        <SynchronousCommand wcm:action="add"><Order>2</Order>
+        <SynchronousCommand wcm:action="add">
+          <Order>2</Order>
           <CommandLine>cmd /c reg add "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f</CommandLine>
           <Description>Enable RDP</Description>
         </SynchronousCommand>
 
-        <SynchronousCommand wcm:action="add"><Order>3</Order>
+        <SynchronousCommand wcm:action="add">
+          <Order>3</Order>
           <CommandLine>cmd /c netsh advfirewall firewall add rule name="Remote Desktop" protocol=TCP dir=in localport=3389 action=allow</CommandLine>
           <Description>Allow RDP Port</Description>
         </SynchronousCommand>
 
-        <SynchronousCommand wcm:action="add"><Order>4</Order>
+        <SynchronousCommand wcm:action="add">
+          <Order>4</Order>
           <CommandLine>cmd /c reg add "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v UserAuthentication /t REG_DWORD /d 1 /f &amp;&amp; reg add "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v SecurityLayer /t REG_DWORD /d 1 /f</CommandLine>
           <Description>Enable NLA (no TLS)</Description>
         </SynchronousCommand>
 
-        <SynchronousCommand wcm:action="add"><Order>5</Order>
+        <SynchronousCommand wcm:action="add">
+          <Order>5</Order>
           <CommandLine>cmd /c net accounts /lockoutthreshold:5 /lockoutduration:15 /lockoutwindow:15</CommandLine>
-          <Description>Set account lockout policy</Description>
+          <Description>Set account lockout policy (5 attempts, 15 min lock)</Description>
         </SynchronousCommand>
 
-        <SynchronousCommand wcm:action="add"><Order>6</Order>
+        <SynchronousCommand wcm:action="add">
+          <Order>6</Order>
           <CommandLine>cmd /c powercfg -change -monitor-timeout-ac 0</CommandLine>
           <Description>Disable screen timeout</Description>
         </SynchronousCommand>
 
-        <SynchronousCommand wcm:action="add"><Order>7</Order>
+        <SynchronousCommand wcm:action="add">
+          <Order>7</Order>
           <CommandLine>cmd /c powercfg -change -standby-timeout-ac 0</CommandLine>
           <Description>Disable sleep</Description>
         </SynchronousCommand>
 
-        <!-- Hyper-V hard disable BEFORE reboot -->
-        <SynchronousCommand wcm:action="add"><Order>8</Order>
-          <CommandLine>cmd /c bcdedit /set hypervisorlaunchtype off</CommandLine>
-          <Description>Disable Hyper-V launch</Description>
-        </SynchronousCommand>
-
-        <SynchronousCommand wcm:action="add"><Order>9</Order>
-          <CommandLine>cmd /c reg add "HKLM\SYSTEM\CurrentControlSet\Services\HvHost" /v Start /t REG_DWORD /d 4 /f</CommandLine>
-          <Description>Disable Hyper-V Host Service</Description>
-        </SynchronousCommand>
-
-        <SynchronousCommand wcm:action="add"><Order>10</Order>
-          <CommandLine>cmd /c reg add "HKLM\SYSTEM\CurrentControlSet\Services\vmcompute" /v Start /t REG_DWORD /d 4 /f</CommandLine>
-          <Description>Disable Hyper-V Compute Service</Description>
-        </SynchronousCommand>
-
-        <SynchronousCommand wcm:action="add"><Order>11</Order>
-          <CommandLine>cmd /c dism /Online /Disable-Feature /FeatureName:Microsoft-Hyper-V-All /NoRestart</CommandLine>
-          <Description>Disable Hyper-V Feature</Description>
-        </SynchronousCommand>
-
-        <SynchronousCommand wcm:action="add"><Order>12</Order>
+        <SynchronousCommand wcm:action="add">
+          <Order>8</Order>
           <CommandLine>cmd /c echo Installation Complete &gt; C:\install_complete.txt</CommandLine>
           <Description>Mark installation complete</Description>
         </SynchronousCommand>
 
-        <SynchronousCommand wcm:action="add"><Order>13</Order>
+        <SynchronousCommand wcm:action="add">
+          <Order>9</Order>
+          <CommandLine>cmd /c bcdedit /set hypervisorlaunchtype off</CommandLine>
+          <Description>Disable Hyper-V launch</Description>
+        </SynchronousCommand>
+
+        <SynchronousCommand wcm:action="add">
+          <Order>10</Order>
+          <CommandLine>cmd /c reg add "HKLM\SYSTEM\CurrentControlSet\Services\HvHost" /v Start /t REG_DWORD /d 4 /f</CommandLine>
+          <Description>Disable Hyper-V Host Service</Description>
+        </SynchronousCommand>
+
+        <SynchronousCommand wcm:action="add">
+          <Order>11</Order>
+          <CommandLine>cmd /c reg add "HKLM\SYSTEM\CurrentControlSet\Services\vmcompute" /v Start /t REG_DWORD /d 4 /f</CommandLine>
+          <Description>Disable Hyper-V Compute Service</Description>
+        </SynchronousCommand>
+
+        <SynchronousCommand wcm:action="add">
+          <Order>12</Order>
           <CommandLine>cmd /c shutdown /r /t 15 /c "Hyper-V disabled, rebooting..."</CommandLine>
           <Description>Reboot after disabling Hyper-V</Description>
+        </SynchronousCommand>
+
+        <SynchronousCommand wcm:action="add">
+          <Order>13</Order>
+          <CommandLine>cmd /c dism /Online /Disable-Feature /FeatureName:Microsoft-Hyper-V-All /NoRestart</CommandLine>
+          <Description>Remove Hyper-V Feature (Optional)</Description>
         </SynchronousCommand>
 
       </FirstLogonCommands>
@@ -454,42 +541,46 @@ cat > "$AUTOUNATTEND_DIR/autounattend.xml" << 'XMLEOF'
 </unattend>
 XMLEOF
 
+# Replace placeholders
 sed -i "s|USERNAME_PLACEHOLDER|${WIN_USERNAME_ESC}|g" "$AUTOUNATTEND_DIR/autounattend.xml"
 sed -i "s|PASSWORD_PLACEHOLDER|${WIN_PASSWORD_ESC}|g" "$AUTOUNATTEND_DIR/autounattend.xml"
 sed -i "s|COMPUTERNAME_PLACEHOLDER|${WIN_COMPUTERNAME_ESC}|g" "$AUTOUNATTEND_DIR/autounattend.xml"
 
+# Validate XML
 if command -v xmllint &>/dev/null; then
   if ! xmllint --noout "$AUTOUNATTEND_DIR/autounattend.xml" 2>/dev/null; then
-    warn "xmllint found issues or schema missing — skipping strict validation"
+    warn "xmllint found issues or is missing schema — skipping strict validation"
   else
     ok "Autounattend.xml validated successfully"
   fi
 fi
+ok "Autounattend.xml generated with username: ${WIN_USERNAME}"
 
-# Floppy with autounattend
+# --- Create Floppy Image with autounattend.xml ---
 FLOPPY_IMG="${ISO_CACHE}/autounattend-${VM_NAME}.img"
 step "Creating floppy image with autounattend.xml..."
-sudo dd if=/dev/zero of="$FLOPPY_IMG" bs=1024 count=1440 status=none
-sudo mkfs.vfat -F 12 "$FLOPPY_IMG" >/dev/null 2>&1 || true
+sudo dd if=/dev/zero of="$FLOPPY_IMG" bs=1024 count=1440 status=none 2>&1 || { err "Failed to create floppy image"; cleanup_and_exit; }
+sudo mkfs.vfat -F 12 "$FLOPPY_IMG" 2>&1 | grep -v "warning" || { err "Failed to format floppy"; cleanup_and_exit; }
 FLOPPY_MOUNT="/mnt/floppy-tmp-${VM_NAME}"
 sudo mkdir -p "$FLOPPY_MOUNT"
-sudo mount -o loop "$FLOPPY_IMG" "$FLOPPY_MOUNT"
-sudo cp "$AUTOUNATTEND_DIR/autounattend.xml" "$FLOPPY_MOUNT/autounattend.xml"
+sudo mount -o loop "$FLOPPY_IMG" "$FLOPPY_MOUNT" || { err "Failed to mount floppy"; cleanup_and_exit; }
+sudo cp "$AUTOUNATTEND_DIR/autounattend.xml" "$FLOPPY_MOUNT/autounattend.xml" || { err "Failed to copy autounattend.xml"; sudo umount "$FLOPPY_MOUNT" 2>/dev/null; cleanup_and_exit; }
 sudo sync
 sudo umount "$FLOPPY_MOUNT" || true
 sudo rmdir "$FLOPPY_MOUNT" 2>/dev/null || true
 ok "Floppy image created: ${FLOPPY_IMG}"
 
-# -------- Disk & VM cleanup --------
+# --- Create Disk ---
 header "Creating VM Disk"
 sudo mkdir -p /var/lib/libvirt/images
 sudo qemu-img create -f qcow2 /var/lib/libvirt/images/${VM_NAME}.img ${DISK_SIZE}G
 ok "Disk ${DISK_SIZE}G ready"
 
+# --- Remove old VM ---
 sudo virsh destroy ${VM_NAME} 2>/dev/null || true
 sudo virsh undefine ${VM_NAME} --nvram --remove-all-storage 2>/dev/null || true
 
-# -------- AppArmor: disable for libvirt --------
+# --- Fix AppArmor issue ---
 header "Fixing AppArmor configuration"
 if grep -q '^security_driver' /etc/libvirt/qemu.conf 2>/dev/null; then
   sudo sed -i 's/^security_driver.*/security_driver = "none"/' /etc/libvirt/qemu.conf
@@ -499,11 +590,12 @@ fi
 sudo systemctl restart libvirtd
 ok "AppArmor disabled for libvirt"
 
-# -------- Default network (NAT + DHCP) --------
+# --- Ensure default network exists and is persistent ---
 if sudo virsh net-info default &>/dev/null; then
   sudo virsh net-destroy default 2>/dev/null || true
   sudo virsh net-undefine default 2>/dev/null || true
 fi
+
 echo "Recreating persistent default network with NAT + DHCP..."
 cat <<EOF | sudo virsh net-define /dev/stdin
 <network>
@@ -517,25 +609,41 @@ cat <<EOF | sudo virsh net-define /dev/stdin
   </ip>
 </network>
 EOF
+
 sudo virsh net-start default
-[[ -L /etc/libvirt/qemu/networks/autostart/default.xml ]] && sudo rm -f /etc/libvirt/qemu/networks/autostart/default.xml
-sudo virsh net-autostart default || warn "Autostart already set"
+if [[ -L /etc/libvirt/qemu/networks/autostart/default.xml ]]; then
+  echo "Removing existing autostart symlink to prevent conflict..."
+  sudo rm -f /etc/libvirt/qemu/networks/autostart/default.xml
+fi
+sudo virsh net-autostart default || { warn "Autostart symlink already exists, skipping..."; }
 ok "Default network active with DHCP"
 
-# -------- KVM access for libvirt-qemu --------
+# --- Create VM with Performance Optimizations ---
+header "Creating Virtual Machine"
+
+# --- Ensure KVM permission for libvirt-qemu ---
 header "Checking KVM access"
 if [[ -e /dev/kvm ]]; then
   sudo chown root:kvm /dev/kvm
   sudo chmod 660 /dev/kvm
-  if id libvirt-qemu &>/dev/null; then sudo usermod -aG kvm libvirt-qemu || true; fi
+  if id libvirt-qemu &>/dev/null; then
+    sudo usermod -aG kvm libvirt-qemu || true
+    ok "libvirt-qemu added to kvm group"
+  else
+    warn "libvirt-qemu user not found; skipping group assignment"
+  fi
   sudo systemctl restart libvirtd || true
-  if sudo -u libvirt-qemu test -r /dev/kvm; then ok "libvirt-qemu can access /dev/kvm"; else warn "libvirt-qemu cannot access /dev/kvm — may fallback to TCG"; fi
+  if sudo -u libvirt-qemu test -r /dev/kvm; then
+    ok "libvirt-qemu can access /dev/kvm"
+  else
+    warn "⚠ libvirt-qemu still cannot access /dev/kvm — fallback to software virtualization"
+    USE_TCG=true
+  fi
 else
   warn "/dev/kvm not found — falling back to software virtualization (TCG)"
+  USE_TCG=true
 fi
 
-# -------- Create VM (headless, no VNC/video) --------
-header "Creating Virtual Machine (headless)"
 sudo virt-install \
   --name "${VM_NAME}" \
   --ram "${RAM_SIZE}" \
@@ -558,9 +666,10 @@ sudo virt-install \
   --tpm backend.type=emulator,model=tpm-crb \
   --rng device=/dev/urandom \
   --noautoconsole
+
 ok "VM created: ${VM_NAME}"
 
-# -------- Nested virtualization --------
+# --- Enable Nested Virtualization ---
 echo "🔧 Checking for nested virtualization support..."
 if grep -q vmx /proc/cpuinfo; then
   echo "🧠 Intel CPU detected — enabling nested virtualization"
@@ -575,14 +684,17 @@ elif grep -q svm /proc/cpuinfo; then
 else
   warn "⚠️ No VMX/SVM virtualization extensions found; nested virtualization unavailable."
 fi
-sudo virt-xml "${VM_NAME}" --edit --cpu host-passthrough,add_feature=vmx 2>/dev/null || true
-ok "Nested virtualization configured"
 
-# Force boot order HDD first
+# Ensure guest CPU gets VMX feature flag
+sudo virt-xml "${VM_NAME}" --edit --cpu host-passthrough,add_feature=vmx 2>/dev/null || true
+ok "Nested virtualization enabled for ${VM_NAME} (VMX passthrough active)"
+
+# --- Force boot order to HDD first ---
+echo "🧩 Forcing boot order: hard disk first"
 sudo virt-xml "${VM_NAME}" --edit --boot hd,cdrom || true
 ok "Boot order set to HDD first"
 
-# -------- Huge Pages --------
+# --- Configure Huge Pages ---
 echo "⚡ Configuring huge pages for better memory performance..."
 HUGEPAGES_NEEDED=$(( (RAM_SIZE / 2) + 256 ))
 AVAILABLE_MEM_MB=$(free -m | awk '/^Mem:/ {print $7}')
@@ -594,8 +706,7 @@ else
   if (( CURRENT_HUGEPAGES < HUGEPAGES_NEEDED )); then
     echo ${HUGEPAGES_NEEDED} | sudo tee /proc/sys/vm/nr_hugepages >/dev/null
     ACTUAL_HUGEPAGES=$(cat /proc/sys/vm/nr_hugepages)
-    if (( ACTUAL_HUGEPAGES < HUGEPAGES_NEEDED )); then
-      warn "Could only allocate ${ACTUAL_HUGEPAGES} huge pages"; SKIP_HUGEPAGES=true
+    if (( ACTUAL_HUGEPAGES < HUGEPAGES_NEEDED )); then warn "Could only allocate ${ACTUAL_HUGEPAGES} huge pages"; SKIP_HUGEPAGES=true
     else
       grep -q "vm.nr_hugepages" /etc/sysctl.conf 2>/dev/null \
         && sudo sed -i "s/^vm.nr_hugepages=.*/vm.nr_hugepages=${HUGEPAGES_NEEDED}/" /etc/sysctl.conf \
@@ -603,16 +714,21 @@ else
       ok "Huge pages configured: ${ACTUAL_HUGEPAGES}"; SKIP_HUGEPAGES=false
     fi
   else
-    ok "Huge pages already configured: ${CURRENT_HUGEPAGES}"; SKIP_HUGEPAGES=false
+    ok "Huge pages already configured: ${CURRENT_HUGEPAGES}"
+    SKIP_HUGEPAGES=false
   fi
 fi
 
-# vhost_net + multiqueue
+# --- Load vhost_net module ---
+echo "🔧 Checking for vhost_net module..."
 if ! lsmod | grep -q vhost_net; then
   echo "➡️  Loading vhost_net kernel module..."; sudo modprobe vhost_net
   grep -q "vhost_net" /etc/modules 2>/dev/null || echo "vhost_net" | sudo tee -a /etc/modules >/dev/null
   ok "vhost_net module loaded"
 fi
+
+# --- Stop VM temporarily for configuration ---
+echo "⏸️  Stopping VM for final configuration..."
 sudo virsh shutdown "${VM_NAME}" 2>/dev/null || true
 for i in {1..30}; do
   if ! sudo virsh list --state-running | grep -q "${VM_NAME}"; then break; fi
@@ -620,25 +736,33 @@ for i in {1..30}; do
 done
 sudo virsh destroy "${VM_NAME}" 2>/dev/null || true
 sleep 2
+
+# --- Enable vhost accelerator and multiqueue ---
+echo "⚙️  Enabling vhost accelerator and multiqueue (${VCPU_COUNT} queues)..."
 sudo virt-xml "${VM_NAME}" --edit --network driver_name=vhost,driver_queues="${VCPU_COUNT}" 2>/dev/null || warn "Failed to set vhost, continuing..."
 
+# --- Enable Huge Pages for VM ---
 if [[ "${SKIP_HUGEPAGES:-true}" == "false" ]]; then
+  echo "💾 Enabling huge pages for VM..."
   sudo virt-xml "${VM_NAME}" --edit --memorybacking hugepages=on 2>/dev/null || warn "Failed to set huge pages, continuing..."
   ok "Huge pages enabled for VM"
 fi
 
-# -------- Start VM & monitor --------
+# --- Start VM ---
 header "Starting Windows Installation"
 sudo virsh start "${VM_NAME}"
-ok "VM started - installation beginning..."
+ok "VM started - Windows installation beginning..."
 sleep 15
 
-header "Monitoring Installation (headless)"
+header "Monitoring Installation Progress"
+echo -e "${BLUE}This will take 10-20 minutes depending on your system${NC}"
 echo -e "${YELLOW}The VM will reboot automatically during installation${NC}"
+echo ""
+
 REBOOT_DETECTED=false
 INSTALL_COMPLETE=false
 CHECK_COUNT=0
-MAX_CHECKS=180  # 30 minutes
+MAX_CHECKS=180  # 30 minutes max
 
 while (( CHECK_COUNT < MAX_CHECKS )); do
   CHECK_COUNT=$((CHECK_COUNT + 1))
@@ -686,77 +810,139 @@ while (( CHECK_COUNT < MAX_CHECKS )); do
 
   sleep 10
 done
-echo ""
 
-# Quick wait for IP
+sleep 10
+echo "⏳ Waiting for VM network initialization..."
+echo "   (This may take 30-60 seconds for Windows to boot and get IP address)"
+
 set +e
 MAX_WAIT=60
+IP_DETECTED=false
+
 for i in $(seq 1 $MAX_WAIT); do
-  VM_IP=$(sudo virsh domifaddr "${VM_NAME}" 2>/dev/null | grep -oP '(\d{1,3}\.){3}\d{1,3}' | head -1 || echo "")
-  [[ -n "$VM_IP" ]] && break
-  (( i % 10 == 0 )) && echo "   ... waiting IP (${i}s/${MAX_WAIT}s)"
+  if ! sudo virsh dominfo "${VM_NAME}" &>/dev/null; then
+    echo ""
+    echo "⚠️ VM ${VM_NAME} not found or not defined"
+    break
+  fi
+
+  VM_COUNT=$(sudo virsh list --name 2>/dev/null | grep -c -v '^$' || echo "0")
+  if [[ "$VM_COUNT" == "0" ]]; then
+    echo ""
+    echo "⚠️ No running VMs detected, attempting to start ${VM_NAME}..."
+    sudo virsh start "${VM_NAME}" >/dev/null 2>&1
+    sleep 5
+    continue
+  fi
+
+  HAS_IP=""
+  VM_LIST=$(sudo virsh list --name 2>/dev/null || echo "")
+  if [[ -n "$VM_LIST" ]]; then
+    while IFS= read -r vm; do
+      if [[ -n "$vm" ]] && [[ "$vm" != "" ]]; then
+        IP_CHECK=$(sudo virsh domifaddr "$vm" 2>/dev/null | grep -o 'ipv4' || echo "")
+        if [[ "$IP_CHECK" == "ipv4" ]]; then
+          HAS_IP="yes"
+          break
+        fi
+      fi
+    done <<< "$VM_LIST"
+  fi
+
+  if [[ "$HAS_IP" == "yes" ]]; then
+    echo ""
+    echo "✓ VM IP detected after ${i} seconds"
+    IP_DETECTED=true
+    sleep 5
+    break
+  fi
+
+  if (( i % 10 == 0 )); then
+    echo ""
+    echo "   ... still waiting (${i}s / ${MAX_WAIT}s)"
+  else
+    echo -n "."
+  fi
+
   sleep 1
 done
 set -e
 
-# -------- Summary --------
-if [[ "${INSTALL_COMPLETE}" == "true" ]]; then
-  header "Installation Complete!"
-  ok "Windows 10 LTSC installed successfully!"
+echo ""
+if [[ "$IP_DETECTED" == "true" ]]; then
+  echo "✅ Network initialization successful"
 else
-  warn "Installation monitoring timed out after $(( MAX_CHECKS * 10 / 60 )) minutes"
+  echo "⚠️ Timeout waiting for network (${MAX_WAIT}s elapsed)"
+  echo "   VM may still be booting. Check manually with:"
+  echo "   sudo virsh domifaddr ${VM_NAME}"
 fi
 
 echo ""
-echo -e "${BLUE}VM Details:${NC}"
-echo "  Name: ${VM_NAME}"
-echo "  Computer Name: ${WIN_COMPUTERNAME}"
-echo "  Username: ${WIN_USERNAME}"
-echo "  Password: [hidden]"
-echo "  IP Address: ${VM_IP:-unknown}"
-echo ""
-echo -e "${GREEN}✅ Auto-configured features:${NC}"
-echo "  ✓ VirtIO storage & network drivers"
-echo "  ✓ Remote Desktop (RDP) enabled"
-echo "  ✓ Windows Firewall disabled"
-echo "  ✓ Hyper-V fully disabled (feature/services/boot)"
+if [[ "$INSTALL_COMPLETE" == "true" ]]; then
+  header "Installation Complete!"
+  ok "Windows 10 Ltsc installed successfully!"
+  echo ""
+  echo -e "${BLUE}VM Details:${NC}"
+  echo "  Name: ${VM_NAME}"
+  echo "  Computer Name: ${WIN_COMPUTERNAME}"
+  echo "  Username: ${WIN_USERNAME}"
+  echo "  Password: [hidden]"
+  echo "  IP Address: ${VM_IP:-unknown}"
+  echo ""
+  echo -e "${GREEN}✅ Auto-configured features:${NC}"
+  echo "  ✓ VirtIO storage & network drivers"
+  echo "  ✓ Remote Desktop (RDP) enabled"
+  echo "  ✓ Windows Firewall disabled"
+  echo "  ✓ Network configured automatically"
+else
+  warn "Installation monitoring timed out after $(( MAX_CHECKS * 10 / 60 )) minutes"
+  echo ""
+  echo "Please check VM status manually:"
+  echo "  sudo virsh list --all"
+  echo "  sudo virsh domifaddr ${VM_NAME}"
+fi
+
 echo ""
 echo -e "${BLUE}Resource Allocation:${NC}"
-echo "  RAM : ${RAM_SIZE} MB (of ${TOTAL_RAM_MB} MB)"
-echo "  vCPU: ${VCPU_COUNT} of ${TOTAL_CPUS}"
-echo "  Disk: ${DISK_SIZE} GB (free root was ${FREE_DISK_GB} GB)"
+echo "  RAM: ${RAM_SIZE} MB (~${RAM_PERCENT}% of ${TOTAL_RAM_MB} MB)"
+echo "  vCPUs: ${VCPU_COUNT} of ${TOTAL_CPUS}"
+echo "  Disk: ${DISK_SIZE} GB"
 echo "  Swap: ${SWAP_SIZE} GB"
 echo ""
 echo -e "${BLUE}Performance Features:${NC}"
 echo "  ✓ KVM hardware virtualization"
-echo "  ✓ Host CPU passthrough + cache passthrough"
+echo "  ✓ VirtIO drivers (network + storage)"
+echo "  ✓ Host CPU passthrough"
 echo "  ✓ vhost-net acceleration + multiqueue (${VCPU_COUNT})"
 if [[ "${SKIP_HUGEPAGES:-true}" == "false" ]]; then
   echo "  ✓ Huge pages enabled"
 else
-  echo "  ○ Huge pages skipped (insufficient free memory)"
+  echo "  ○ Huge pages skipped (insufficient memory)"
 fi
-echo "  ✓ Headless (no VNC/video) — use RDP"
+echo "  ✓ Hyper-V enlightenments"
 echo ""
 echo -e "${BLUE}Cached Files:${NC}"
-echo "  Windows ISO     : ${ISO_FILE}"
-echo "  VirtIO Drivers  : ${VIRTIO_FILE}"
-echo "  Autounattend FDD: ${FLOPPY_IMG}"
+echo "  Windows ISO: ${ISO_FILE}"
+echo "  VirtIO Drivers: ${VIRTIO_FILE}"
+echo "  Autounattend Floppy: ${FLOPPY_IMG}"
 echo ""
+ok "Setup complete! VM is ready to use."
 
-# -------- Optional hooks --------
+# Configure auto restart
 if [[ -f "$AUTO_RESTART_SCRIPT" ]]; then
+  echo ""
   echo "🚀 Configuring VM auto-restart..."
   sudo bash "$AUTO_RESTART_SCRIPT"
 else
-  echo "No auto restart when VM stopped (script not present)"
+  echo "No auto restart when vm stopped"
 fi
 
+# Configure port forward
 if [[ -f "$PORT_FORWARD_SCRIPT" ]]; then
-  echo "🚀 Configuring RDP port forwarding on host port ${RDP_PORT}..."
+  echo ""
+  echo "🚀 Configuring RDP port forwarding..."
   sudo bash "$PORT_FORWARD_SCRIPT" "$RDP_PORT"
 else
-  warn "enable_port_forward_rdp.sh not found in $SCRIPT_DIR. Skipping port forward."
+  warn "enable_port_forward_rdp.sh not found in $SCRIPT_DIR. Skipping auto-configuration."
+  echo "Download and run manually when VM is ready."
 fi
-
-ok "Setup complete! Connect via RDP to ${VM_IP:-<VM-IP>} on port ${RDP_PORT}."
