@@ -104,14 +104,26 @@ echo "Allocated RAM (auto): ${RAM_SIZE} MB (~${RAM_PERCENT}% of total)"
 VCPU_COUNT=$TOTAL_CPUS
 echo "Allocated vCPUs (auto): ${VCPU_COUNT}"
 
-# Disk: leave 8GB free on host, min 20GB
-if (( FREE_DISK_GB > 8 )); then
-  DISK_SIZE=$(( FREE_DISK_GB - 8 ))
+# Swap: 35% of total RAM (GB), floor, min 1GB
+TOTAL_RAM_GB=$(( (TOTAL_RAM_MB + 1023) / 1024 ))
+SWAP_SIZE=$(( TOTAL_RAM_GB * 35 / 100 ))
+(( SWAP_SIZE < 1 )) && SWAP_SIZE=1
+echo "Allocated Swap (auto): ${SWAP_SIZE} GB (~35% of RAM)"
+
+# Hitung ukuran total ISO (Windows + VirtIO)
+ISO_WIN_SIZE_GB=$(($(stat -c%s "$ISO_FILE" 2>/dev/null || echo 0) / 1073741824))
+ISO_VIRTIO_SIZE_GB=$(($(stat -c%s "$VIRTIO_FILE" 2>/dev/null || echo 0) / 1073741824))
+ISO_TOTAL_SIZE=$(( ISO_WIN_SIZE_GB + ISO_VIRTIO_SIZE_GB ))
+(( ISO_TOTAL_SIZE < 1 )) && ISO_TOTAL_SIZE=4   # fallback asumsi ~4GB total jika belum ada file
+
+# Disk: free disk - swap - iso - 8GB (minimum 20GB)
+if (( FREE_DISK_GB > (SWAP_SIZE + ISO_TOTAL_SIZE + 8) )); then
+  DISK_SIZE=$(( FREE_DISK_GB - SWAP_SIZE - ISO_TOTAL_SIZE - 8 ))
 else
   DISK_SIZE=20
 fi
 (( DISK_SIZE < 20 )) && DISK_SIZE=20
-echo "Allocated Disk (auto): ${DISK_SIZE} GB (leaving ~8GB free on host)"
+echo "Allocated Disk (auto): ${DISK_SIZE} GB (free=${FREE_DISK_GB}G, -swap=${SWAP_SIZE}G, -iso=${ISO_TOTAL_SIZE}G, -host=5G)"
 
 # RDP port (PROMPT KEPT)
 echo "🔧 Configure public RDP base port mapping"
@@ -128,12 +140,6 @@ if [[ "$RDP_PORT" -eq 3389 ]]; then
   echo "⚠️  Using default RDP port (3389). Consider a high random port for security."
 fi
 echo "✓ Using base public port: $RDP_PORT"
-
-# Swap: 35% of total RAM (GB), floor, min 1GB
-TOTAL_RAM_GB=$(( (TOTAL_RAM_MB + 1023) / 1024 ))
-SWAP_SIZE=$(( TOTAL_RAM_GB * 35 / 100 ))
-(( SWAP_SIZE < 1 )) && SWAP_SIZE=1
-echo "Allocated Swap (auto): ${SWAP_SIZE} GB (~35% of RAM)"
 
 # --- Dependencies ---
 header "Installing dependencies"
