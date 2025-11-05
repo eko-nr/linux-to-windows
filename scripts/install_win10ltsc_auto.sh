@@ -557,8 +557,7 @@ cat > "$AUTOUNATTEND_DIR/autounattend.xml" << 'XMLEOF'
           <Description>Disable Windows Update and Maintenance Auto Restart</Description>
         </SynchronousCommand>
       </FirstLogonCommands>
-
-      </FirstLogonCommands>
+      
     </component>
   </settings>
 </unattend>
