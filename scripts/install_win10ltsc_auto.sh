@@ -110,11 +110,25 @@ SWAP_SIZE=$(( TOTAL_RAM_GB * 35 / 100 ))
 (( SWAP_SIZE < 1 )) && SWAP_SIZE=1
 echo "Allocated Swap (auto): ${SWAP_SIZE} GB (~35% of RAM)"
 
-# Hitung ukuran total ISO (Windows + VirtIO)
-ISO_WIN_SIZE_GB=$(($(stat -c%s "$ISO_FILE" 2>/dev/null || echo 0) / 1073741824))
-ISO_VIRTIO_SIZE_GB=$(($(stat -c%s "$VIRTIO_FILE" 2>/dev/null || echo 0) / 1073741824))
+# --- SAFE ISO SIZE FALLBACKS ---
+VIRTIO_FILE="${ISO_CACHE}/virtio-win.iso"
+VIRTIO_LINK="/var/lib/libvirt/boot/virtio-win.iso"
+
+ISO_CACHE="/opt/vm-isos"
+ISO_FILE="${ISO_CACHE}/Windows10-Ltsc.iso"
+ISO_LINK="/var/lib/libvirt/boot/Windows10-Ltsc.iso"
+
+VIRTIO_FILE="${VIRTIO_FILE:-/var/lib/libvirt/boot/virtio-win.iso}"
+
+# Hitung ukuran total ISO (Windows + VirtIO) jika sudah ada file
+ISO_WIN_SIZE_GB=$(stat -c%s "$ISO_FILE" 2>/dev/null || echo 0)
+ISO_WIN_SIZE_GB=$(( ISO_WIN_SIZE_GB / 1073741824 ))
+ISO_VIRTIO_SIZE_GB=$(stat -c%s "$VIRTIO_FILE" 2>/dev/null || echo 0)
+ISO_VIRTIO_SIZE_GB=$(( ISO_VIRTIO_SIZE_GB / 1073741824 ))
+
 ISO_TOTAL_SIZE=$(( ISO_WIN_SIZE_GB + ISO_VIRTIO_SIZE_GB ))
-(( ISO_TOTAL_SIZE < 1 )) && ISO_TOTAL_SIZE=4   # fallback asumsi ~4GB total jika belum ada file
+(( ISO_TOTAL_SIZE < 1 )) && ISO_TOTAL_SIZE=4   # fallback default total 4GB
+echo "Detected ISO total size: ${ISO_TOTAL_SIZE} GB"
 
 # Disk: free disk - swap - iso - 8GB (minimum 20GB)
 if (( FREE_DISK_GB > (SWAP_SIZE + ISO_TOTAL_SIZE + 8) )); then
@@ -123,7 +137,7 @@ else
   DISK_SIZE=20
 fi
 (( DISK_SIZE < 20 )) && DISK_SIZE=20
-echo "Allocated Disk (auto): ${DISK_SIZE} GB (free=${FREE_DISK_GB}G, -swap=${SWAP_SIZE}G, -iso=${ISO_TOTAL_SIZE}G, -host=5G)"
+echo "Allocated Disk (auto): ${DISK_SIZE} GB (free=${FREE_DISK_GB}G, -swap=${SWAP_SIZE}G, -iso=${ISO_TOTAL_SIZE}G, -host=8G)"
 
 # RDP port (PROMPT KEPT)
 echo "🔧 Configure public RDP base port mapping"
@@ -253,9 +267,6 @@ fi
 
 # --- ISO Cache ---
 header "Preparing Windows ISO"
-ISO_CACHE="/opt/vm-isos"
-ISO_FILE="${ISO_CACHE}/Windows10-Ltsc.iso"
-ISO_LINK="/var/lib/libvirt/boot/Windows10-Ltsc.iso"
 sudo mkdir -p "$ISO_CACHE" /var/lib/libvirt/boot
 
 # --- Ensure required libvirt system users exist ---
@@ -296,8 +307,6 @@ sudo chmod 644 "$ISO_LINK"
 
 # --- Download virtio drivers ---
 header "Preparing virtio Drivers"
-VIRTIO_FILE="${ISO_CACHE}/virtio-win.iso"
-VIRTIO_LINK="/var/lib/libvirt/boot/virtio-win.iso"
 if [[ ! -f "$VIRTIO_FILE" || $(stat -c%s "$VIRTIO_FILE" 2>/dev/null || echo 0) -lt 50000000 ]]; then
   step "Downloading latest virtio-win drivers..."
   sudo wget -O "$VIRTIO_FILE" "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/latest-virtio/virtio-win.iso"
