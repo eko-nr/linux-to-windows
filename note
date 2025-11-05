@@ -1,0 +1,31 @@
+
+## ========= SETUP GPU ============
+## Detect GPU
+lspci | grep -E "NVIDIA|VGA|3D"
+
+## Example output
+00:1e.0 3D controller: NVIDIA Corporation NVIDIA L4 (rev a1)
+
+## Check driver using GPU
+sudo lspci -ks 00:1e.0
+
+## Example output
+Kernel driver in use: nvidia
+
+## Unbind driver host using GPU
+echo 0000:00:1e.0 | sudo tee /sys/bus/pci/devices/0000:00:1e.0/driver/unbind
+
+## Bind to vfio-pci
+sudo modprobe vfio-pci
+echo 0000:00:1e.0 | sudo tee /sys/bus/pci/drivers/vfio-pci/bind
+
+## Make it permanent 
+sudo nano /etc/modprobe.d/vfio.conf
+change "options vfio-pci ids=10de:27b8,10de:22b9" to => "lspci -n -s 00:1e.0"
+sudo update-initramfs -u
+sudo reboot
+
+## Check
+lspci -k -s 00:1e.0
+
+
