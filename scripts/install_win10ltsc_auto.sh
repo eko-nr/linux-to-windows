@@ -87,10 +87,10 @@ WIN_COMPUTERNAME=${WIN_COMPUTERNAME:-WIN10-LTSC}
 # --- VM Config (AUTO) ---
 header "VM Configuration (AUTO)"
 
-# RAM: 95% total, dengan guard minimal sisa 512MB untuk host
+# RAM: 95% total, dengan guard minimal sisa 300MB untuk host
 RAM_CALC=$(( TOTAL_RAM_MB * 95 / 100 ))
-SAFE_CAP=$(( TOTAL_RAM_MB - 512 ))
-(( SAFE_CAP < 512 )) && SAFE_CAP=512
+SAFE_CAP=$(( TOTAL_RAM_MB - 300 ))
+(( SAFE_CAP < 300 )) && SAFE_CAP=300
 if (( RAM_CALC > SAFE_CAP )); then
   RAM_SIZE=$SAFE_CAP
 else
