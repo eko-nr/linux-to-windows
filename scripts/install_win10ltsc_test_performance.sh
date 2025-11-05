@@ -640,13 +640,18 @@ fi
 # Avoid threads=1 for emulator perf; fall back gracefully on odd numbers
 CPU_CORES=$VCPU_COUNT
 CPU_THREADS=1
-if (( VCPU_COUNT >= 2 )); then
-  if (( VCPU_COUNT % 2 == 0 )); then
-    CPU_CORES=$((VCPU_COUNT/2))
-    CPU_THREADS=2
-  else
-    CPU_CORES=$VCPU_COUNT
-    CPU_THREADS=1
+if grep -qi "amd" /proc/cpuinfo; then
+  CPU_CORES=$VCPU_COUNT
+  CPU_THREADS=1
+else
+  if (( VCPU_COUNT >= 2 )); then
+    if (( VCPU_COUNT % 2 == 0 )); then
+      CPU_CORES=$((VCPU_COUNT/2))
+      CPU_THREADS=2
+    else
+      CPU_CORES=$VCPU_COUNT
+      CPU_THREADS=1
+    fi
   fi
 fi
 
@@ -663,7 +668,7 @@ sudo virt-install \
   --os-variant win10 \
   --network network=default,model=virtio \
   --graphics vnc,listen=0.0.0.0,port="${VNC_PORT}" \
-  --video model=virtio,accel3d=yes \
+  --video model=virtio \
   --boot hd,cdrom,menu=on \
   --disk "${VIRTIO_LINK}",device=cdrom \
   --disk "${FLOPPY_IMG}",device=floppy \
