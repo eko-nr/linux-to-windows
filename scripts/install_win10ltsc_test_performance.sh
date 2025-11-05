@@ -662,7 +662,7 @@ sudo virt-install \
   --vcpus "${VCPU_COUNT}",maxvcpus="${VCPU_COUNT}",sockets=1,cores="${CPU_CORES}",threads="${CPU_THREADS}" \
   --cpu host-passthrough,cache.mode=passthrough,check=none \
   --cdrom "${ISO_LINK}" \
-  --disk path="/var/lib/libvirt/images/${VM_NAME}.img",size="${DISK_SIZE}",bus=scsi,discard=unmap,detect_zeroes=unmap,cache=writeback \
+  --disk path="/var/lib/libvirt/images/${VM_NAME}.img",size="${DISK_SIZE}",bus=scsi,discard=unmap,detect_zeroes=unmap,cache=none,io=threads \
   --controller type=scsi,model=virtio-scsi \
   --controller type=virtio-serial \
   --os-variant win10 \
