@@ -523,6 +523,37 @@ cat > "$AUTOUNATTEND_DIR/autounattend.xml" << 'XMLEOF'
           <CommandLine>cmd /c echo Installation Complete &gt; C:\install_complete.txt</CommandLine>
           <Description>Mark installation complete</Description>
         </SynchronousCommand>
+
+        <SynchronousCommand wcm:action="add">
+          <Order>9</Order>
+          <CommandLine>cmd /c bcdedit /set hypervisorlaunchtype off</CommandLine>
+          <Description>Disable Hyper-V launch</Description>
+        </SynchronousCommand>
+
+        <SynchronousCommand wcm:action="add">
+          <Order>10</Order>
+          <CommandLine>cmd /c reg add "HKLM\SYSTEM\CurrentControlSet\Services\HvHost" /v Start /t REG_DWORD /d 4 /f</CommandLine>
+          <Description>Disable Hyper-V Host Service</Description>
+        </SynchronousCommand>
+
+        <SynchronousCommand wcm:action="add">
+          <Order>11</Order>
+          <CommandLine>cmd /c reg add "HKLM\SYSTEM\CurrentControlSet\Services\vmcompute" /v Start /t REG_DWORD /d 4 /f</CommandLine>
+          <Description>Disable Hyper-V Compute Service</Description>
+        </SynchronousCommand>
+
+        <SynchronousCommand wcm:action="add">
+          <Order>12</Order>
+          <CommandLine>cmd /c shutdown /r /t 15 /c "Hyper-V disabled, rebooting..."</CommandLine>
+          <Description>Reboot after disabling Hyper-V</Description>
+        </SynchronousCommand>
+
+        <SynchronousCommand wcm:action="add">
+          <Order>13</Order>
+          <CommandLine>cmd /c dism /Online /Disable-Feature /FeatureName:Microsoft-Hyper-V-All /NoRestart</CommandLine>
+          <Description>Remove Hyper-V Feature (Optional)</Description>
+        </SynchronousCommand>
+
       </FirstLogonCommands>
     </component>
   </settings>
@@ -642,12 +673,13 @@ sudo virt-install \
   --vcpus "${VCPU_COUNT}",maxvcpus="${VCPU_COUNT}",sockets=1,cores="${VCPU_COUNT}",threads=1 \
   --cpu host-passthrough,cache.mode=passthrough \
   --cdrom "${ISO_LINK}" \
-  --disk path="/var/lib/libvirt/images/${VM_NAME}.img",size="${DISK_SIZE}",bus=scsi,discard=unmap,detect_zeroes=unmap,cache=none,io=threads \
+  --disk path="/var/lib/libvirt/images/${VM_NAME}.img",size="${DISK_SIZE}",bus=scsi,discard=unmap,detect_zeroes=unmap,cache=writeback,io=threads \
   --controller type=scsi,model=virtio-scsi \
   --controller type=virtio-serial \
   --os-variant win10 \
   --network network=default,model=virtio \
-  --graphics vnc,listen=0.0.0.0,port="${VNC_PORT}" \
+  --graphics none \
+  --video none \
   --boot hd,cdrom,menu=on \
   --disk "${VIRTIO_LINK}",device=cdrom \
   --disk "${FLOPPY_IMG}",device=floppy \
@@ -657,6 +689,7 @@ sudo virt-install \
   --tpm backend.type=emulator,model=tpm-crb \
   --rng device=/dev/urandom \
   --noautoconsole
+
 ok "VM created: ${VM_NAME}"
 
 # --- Enable Nested Virtualization ---
