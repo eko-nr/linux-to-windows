@@ -551,6 +551,12 @@ cat > "$AUTOUNATTEND_DIR/autounattend.xml" << 'XMLEOF'
           <Description>Remove Hyper-V Feature (Optional)</Description>
         </SynchronousCommand>
 
+        <SynchronousCommand wcm:action="add">
+          <Order>14</Order>
+          <CommandLine>cmd /c reg add "HKLM\SYSTEM\CurrentControlSet\Control\CrashControl" /v AutoReboot /t REG_DWORD /d 0 /f</CommandLine>
+          <Description>Disable Automatic Restart on System Failure</Description>
+        </SynchronousCommand>
+
       </FirstLogonCommands>
     </component>
   </settings>
