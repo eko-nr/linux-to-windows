@@ -325,7 +325,7 @@ fi
 # --- Ensure Windows ISO ---
 if [[ ! -f "$ISO_FILE" || $(stat -c%s "$ISO_FILE" 2>/dev/null || echo 0) -lt 1000000000 ]]; then
   step "Downloading Windows 10 Ltsc ISO..."
-  sudo wget -O "$ISO_FILE" "https://archive.org/download/windows10ltsc/windows_10_enterprise_ltsc_2019_x64_dvd_5795bb03.iso"
+  sudo wget -O "$ISO_FILE" "https://archive.org/download/en-gb_windows_10_enterprise_ltsc_2019_x64_dvd_cd49b901/en-gb_windows_10_enterprise_ltsc_2019_x64_dvd_cd49b901.iso"
 else
   ok "Using cached ISO: $ISO_FILE"
 fi
@@ -387,12 +387,12 @@ cat > "$AUTOUNATTEND_DIR/autounattend.xml" << 'XMLEOF'
   <settings pass="windowsPE">
     <component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
       <SetupUILanguage>
-        <UILanguage>en-US</UILanguage>
+        <UILanguage>en-GB</UILanguage>
       </SetupUILanguage>
-      <InputLocale>en-US</InputLocale>
-      <SystemLocale>en-US</SystemLocale>
-      <UILanguage>en-US</UILanguage>
-      <UserLocale>en-US</UserLocale>
+      <InputLocale>en-GB</InputLocale>
+      <SystemLocale>en-GB</SystemLocale>
+      <UILanguage>en-GB</UILanguage>
+      <UserLocale>en-GB</UserLocale>
     </component>
 
     <component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
