@@ -148,6 +148,48 @@ sudo apt install -y \
  libgnutls28-dev gnutls-bin libxml2-utils xorriso \
  dosfstools libguestfs-tools swtpm swtpm-tools nftables
 
+# --- Prepare SWTPM (TPM 2.0 emulator) ---
+header "Preparing SWTPM"
+
+# Ensure required tools exist
+if ! command -v certtool >/dev/null 2>&1; then
+  warn "certtool not found; installing gnutls-bin..."
+  sudo apt-get install -y gnutls-bin
+fi
+if ! command -v swtpm_setup >/dev/null 2>&1; then
+  err "swtpm_setup not found; please install 'swtpm-tools'"; cleanup_and_exit
+fi
+
+# Start local CA used by swtpm_setup to issue EK/Platform certificates
+if systemctl list-unit-files | grep -q swtpm-localca.socket; then
+  sudo systemctl enable --now swtpm-localca.socket
+  ok "swtpm-localca socket is active"
+else
+  warn "swtpm-localca.socket not available; swtpm_setup may fail"
+fi
+
+# Create libvirt swtpm base directory
+sudo install -d -m 0755 -o root -g root /var/lib/libvirt/swtpm
+
+# Pre-initialize TPM 2.0 state for this VM to avoid libvirt calling swtpm_setup
+TPM_STATE_DIR="/var/lib/libvirt/swtpm/${VM_NAME}"
+sudo install -d -m 0700 -o root -g root "$TPM_STATE_DIR"
+
+TPM_ARGS=""
+if sudo /usr/bin/swtpm_setup \
+      --tpm2 \
+      --tpmstate "dir=${TPM_STATE_DIR}" \
+      --create-ek-cert \
+      --create-platform-cert \
+      --overwrite >/tmp/swtpm_setup_${VM_NAME}.log 2>&1; then
+  ok "TPM 2.0 state pre-initialized"
+  # Use the most compatible model for Windows 10 LTSC
+  TPM_ARGS="--tpm backend.type=emulator,backend.version=2.0,model=tpm-tis"
+else
+  warn "TPM pre-initialization failed; see /tmp/swtpm_setup_${VM_NAME}.log"
+  warn "Proceeding without a TPM; you can add a TPM to the VM later."
+  TPM_ARGS=""
+fi
 
 # --- libvirt check ---
 header "Checking libvirt/virsh"
@@ -692,7 +734,7 @@ sudo virt-install \
   --check path_in_use=off \
   --features hyperv_relaxed=on,hyperv_vapic=on,hyperv_spinlocks=on,hyperv_spinlocks_retries=8191 \
   --clock hypervclock_present=yes \
-  --tpm backend.type=emulator,model=tpm-crb \
+  ${TPM_ARGS} \
   --rng device=/dev/urandom \
   --noautoconsole 
 
