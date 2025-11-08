@@ -170,6 +170,29 @@ sudo apt install -y \
  libgnutls28-dev gnutls-bin libxml2-utils xorriso \
  dosfstools libguestfs-tools swtpm swtpm-tools nftables
 
+# --- Prepare SWTPM (TPM 2.0 emulator) ---
+header "Preparing SWTPM"
+
+if systemctl list-unit-files | grep -q swtpm-localca.socket; then
+  sudo systemctl enable --now swtpm-localca.socket
+else
+  warn "swtpm-localca.socket tidak ditemukan; lanjutkan tapi swtpm_setup mungkin gagal"
+fi
+
+sudo install -d -m 0755 -o root -g root /var/lib/libvirt/swtpm
+
+TPM_ARGS=""
+if command -v swtpm_setup >/dev/null; then
+  if sudo /usr/bin/swtpm_setup --tpm2 --print-capabilities >/dev/null 2>&1; then
+    TPM_ARGS="--tpm backend.type=emulator,backend.version=2.0,model=tpm-tis"
+    ok "SWTPM ready (TPM 2.0 via swtpm + localca)"
+  else
+    warn "swtpm_setup test failed"
+  fi
+else
+  warn "swtpm_setup not found"
+fi
+
 # --- libvirt check ---
 header "Checking libvirt/virsh"
 SKIP_BUILD=false
@@ -685,7 +708,7 @@ sudo virt-install \
   --check path_in_use=off \
   --features hyperv_relaxed=on,hyperv_vapic=on,hyperv_spinlocks=on,hyperv_spinlocks_retries=8191 \
   --clock hypervclock_present=yes \
-  --tpm backend.type=emulator,model=tpm-crb \
+  ${TPM_ARGS} \
   --rng device=/dev/urandom \
   --noautoconsole
 
