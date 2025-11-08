@@ -601,6 +601,12 @@ cat > "$AUTOUNATTEND_DIR/autounattend.xml" << 'XMLEOF'
           <CommandLine>powershell.exe -ExecutionPolicy Bypass -Command "reg add 'HKLM\Software\Policies\Microsoft\Windows\WindowsUpdate\AU' /v NoAutoRebootWithLoggedOnUsers /t REG_DWORD /d 1 /f; reg add 'HKLM\Software\Policies\Microsoft\Windows\WindowsUpdate\AU' /v RebootRelaunchTimeoutEnabled /t REG_DWORD /d 0 /f; reg add 'HKLM\Software\Policies\Microsoft\Windows\WindowsUpdate\AU' /v AlwaysAutoRebootAtScheduledTime /t REG_DWORD /d 0 /f; schtasks /Change /TN '\Microsoft\Windows\TaskScheduler\Maintenance Configurator' /DISABLE; schtasks /Change /TN '\Microsoft\Windows\TaskScheduler\Regular Maintenance' /DISABLE; schtasks /Change /TN '\Microsoft\Windows\UpdateOrchestrator\Reboot' /DISABLE; schtasks /Change /TN '\Microsoft\Windows\UpdateOrchestrator\Schedule Retry' /DISABLE; schtasks /Change /TN '\Microsoft\Windows\UpdateOrchestrator\Schedule Maintenance Work' /DISABLE"</CommandLine>
           <Description>Disable Windows Update and Maintenance Auto Restart</Description>
         </SynchronousCommand>
+
+        <SynchronousCommand wcm:action="add">
+          <Order>15</Order>
+          <CommandLine>msiexec /i E:\guest-agent\qemu-ga-x86_64.msi /qn /norestart</CommandLine>
+          <Description>Install QEMU Guest Agent</Description>
+        </SynchronousCommand>
       </FirstLogonCommands>
 
     </component>
@@ -726,8 +732,10 @@ sudo virt-install \
   --controller type=virtio-serial \
   --os-variant win10 \
   --network network=default,model=virtio \
-  --graphics none \
-  --video none \
+  --graphics spice,listen=127.0.0.1,gl=on \
+  --video qxl \
+  --channel spicevmc \
+  --input tablet,bus=usb \
   --boot hd,cdrom,menu=on \
   --disk "${VIRTIO_LINK}",device=cdrom \
   --disk "${FLOPPY_IMG}",device=floppy \
@@ -736,7 +744,7 @@ sudo virt-install \
   --clock hypervclock_present=yes \
   ${TPM_ARGS} \
   --rng device=/dev/urandom \
-  --noautoconsole 
+  --noautoconsole
 
 ok "VM created: ${VM_NAME}"
 
