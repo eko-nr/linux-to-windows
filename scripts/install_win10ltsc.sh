@@ -695,45 +695,57 @@ sudo virsh net-autostart default || {
 }
 ok "Default network active with DHCP"
 
+# ==== Graphics / GPU detection & virt-type ====================================
+VIRT_TYPE=(--virt-type kvm)
+[[ "${USE_TCG:-false}" == "true" ]] && VIRT_TYPE=(--virt-type qemu)
+
+RENDER_NODE=""
+for n in /dev/dri/renderD*; do
+  [[ -e "$n" ]] && RENDER_NODE="$n" && break
+done
+
+if [[ -n "$RENDER_NODE" ]]; then
+  if id libvirt-qemu &>/dev/null; then
+    sudo usermod -aG render libvirt-qemu 2>/dev/null || true
+    sudo systemctl restart libvirtd 2>/dev/null || true
+    if ! sudo -u libvirt-qemu test -r "$RENDER_NODE"; then
+      echo "⚠️  libvirt-qemu cannot access $RENDER_NODE → fallback GL OFF"
+      RENDER_NODE=""
+    fi
+  else
+    echo "⚠️  user libvirt-qemu missing → fallback GL OFF"
+    RENDER_NODE=""
+  fi
+fi
+
+if [[ -n "$RENDER_NODE" ]]; then
+  GRAPHICS_OPT=(--graphics "spice,listen=none,gl=on,rendernode=${RENDER_NODE}")
+  VIDEO_OPT=(--video "virtio,accel3d=yes")
+  echo "✅ GL ON via ${RENDER_NODE} (SPICE-GL, local socket)"
+else
+  GRAPHICS_OPT=(--graphics "spice,listen=127.0.0.1,gl=off")
+  VIDEO_OPT=(--video "virtio")
+  echo "ℹ️  GL OFF fallback (safe mode)"
+fi
+# ==============================================================================
+
 # --- Create VM with Performance Optimizations ---
 header "Creating Virtual Machine"
-
-# --- Ensure KVM permission for libvirt-qemu ---
-header "Checking KVM access"
-if [[ -e /dev/kvm ]]; then
-  sudo chown root:kvm /dev/kvm
-  sudo chmod 660 /dev/kvm
-  if id libvirt-qemu &>/dev/null; then
-    sudo usermod -aG kvm libvirt-qemu || true
-    ok "libvirt-qemu added to kvm group"
-  else
-    warn "libvirt-qemu user not found; skipping group assignment"
-  fi
-  sudo systemctl restart libvirtd || true
-  if sudo -u libvirt-qemu test -r /dev/kvm; then
-    ok "libvirt-qemu can access /dev/kvm"
-  else
-    warn "⚠ libvirt-qemu still cannot access /dev/kvm — fallback to software virtualization"
-    USE_TCG=true
-  fi
-else
-  warn "/dev/kvm not found — falling back to software virtualization (TCG)"
-  USE_TCG=true
-fi
 
 sudo virt-install \
   --name "${VM_NAME}" \
   --ram "${RAM_SIZE}" \
   --vcpus "${VCPU_COUNT}",maxvcpus="${VCPU_COUNT}",sockets=1,cores="${VCPU_COUNT}",threads=1 \
   --cpu host-passthrough,cache.mode=passthrough \
+  "${VIRT_TYPE[@]}" \
   --cdrom "${ISO_LINK}" \
   --disk path="/var/lib/libvirt/images/${VM_NAME}.img",size="${DISK_SIZE}",bus=scsi,discard=unmap,detect_zeroes=unmap,cache=writeback,io=threads \
   --controller type=scsi,model=virtio-scsi \
   --controller type=virtio-serial \
   --os-variant win10 \
   --network network=default,model=virtio \
-  --graphics spice,listen=127.0.0.1,gl=on \
-  --video qxl \
+  "${GRAPHICS_OPT[@]}" \
+  "${VIDEO_OPT[@]}" \
   --channel spicevmc \
   --input tablet,bus=usb \
   --boot hd,cdrom,menu=on \

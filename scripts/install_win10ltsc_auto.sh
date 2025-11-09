@@ -709,9 +709,6 @@ fi
 sudo virsh net-autostart default || { warn "Autostart symlink already exists, skipping..."; }
 ok "Default network active with DHCP"
 
-# --- Create VM with Performance Optimizations ---
-header "Creating Virtual Machine"
-
 # --- Ensure KVM permission for libvirt-qemu ---
 header "Checking KVM access"
 if [[ -e /dev/kvm ]]; then
@@ -770,6 +767,8 @@ else
 fi
 # ==============================================================================
 
+# --- Create VM with Performance Optimizations ---
+header "Creating Virtual Machine"
 
 sudo virt-install \
   --name "${VM_NAME}" \
