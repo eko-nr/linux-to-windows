@@ -11,6 +11,11 @@ PORT_FORWARD_SCRIPT="$SCRIPT_DIR/enable_port_forward_rdp.sh"
 AUTO_RESTART_SCRIPT="$SCRIPT_DIR/auto_restart.sh"
 
 set -euo pipefail
+if [[ $(id -u) -ne 0 ]]; then
+  echo "❌ Must run as root: sudo bash $0"
+  exit 1
+fi
+
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 header() { echo -e "\n${GREEN}=== $1 ===${NC}"; }
 step()   { echo -e "${YELLOW}→ $1${NC}"; }
@@ -981,7 +986,7 @@ else
 fi
 
 echo ""
-if [[ "$INSTALL_COMPLETE" == "true" ]]; then
+if true; then
   echo ""
   echo "🔧 Applying HugePages + RAM limit (83%)..."
 
@@ -994,29 +999,32 @@ if [[ "$INSTALL_COMPLETE" == "true" ]]; then
   HUGE_PAGES=$(( TARGET_RAM_GIB * 1024 / 2 ))
   echo "→ Allocating HugePages: ${HUGE_PAGES} x 2MB pages"
 
-  echo "${HUGE_PAGES}" > /proc/sys/vm/nr_hugepages
-  sysctl -w vm.nr_hugepages="${HUGE_PAGES}" >/dev/null || true
-
-  echo "✓ HugePages allocated"
+  if ! echo "${HUGE_PAGES}" > /proc/sys/vm/nr_hugepages 2>/dev/null; then
+    echo "❌ failed set nr_hugepages"
+  else
+    echo "✓ HugePages allocated"
+  fi
 
   XML_TMP=$(mktemp)
   virsh dumpxml "${VM_NAME}" > "${XML_TMP}"
 
   sed -i '/<memoryBacking>/,/<\/memoryBacking>/d' "${XML_TMP}"
-  sed -i '/<devices>/i\
-  <memoryBacking>\
-    <hugepages/>\
-  </memoryBacking>' "${XML_TMP}"
+  sed -i "/<currentMemory/a\
+  <memoryBacking>\n\
+    <hugepages/>\n\
+  </memoryBacking>" "${XML_TMP}"
 
   TARGET_RAM_KIB=$(( TARGET_RAM_GIB * 1024 * 1024 ))
 
-  sed -i "s|<memory[^>]*>.*</memory>|<memory unit='KiB'>${TARGET_RAM_KIB}</memory>|" "${XML_TMP}"
-  sed -i "s|<currentMemory[^>]*>.*</currentMemory>|<currentMemory unit='KiB'>${TARGET_RAM_KIB}</currentMemory>|" "${XML_TMP}"
+  sed -i "s|\(<memory unit='KiB'>\)[0-9]\+\(</memory>\)|\1${TARGET_RAM_KIB}\2|" "${XML_TMP}"
+  sed -i "s|\(<currentMemory unit='KiB'>\)[0-9]\+\(</currentMemory>\)|\1${TARGET_RAM_KIB}\2|" "${XML_TMP}"
 
-  virsh define "${XML_TMP}" >/dev/null
+  if ! virsh define "${XML_TMP}"; then
+    echo "❌ virsh define failed, check ${XML_TMP}"
+  else
+    echo "✓ XML updated → VM now uses HugePages + ${TARGET_RAM_GIB}GB RAM"
+  fi
   rm -f "${XML_TMP}"
-
-  echo "✓ XML updated → VM now uses HugePages + ${TARGET_RAM_GIB}GB RAM"
 
   echo "🔄 Restarting VM with HugePages..."
   virsh shutdown "${VM_NAME}" >/dev/null 2>&1 || true
@@ -1025,7 +1033,6 @@ if [[ "$INSTALL_COMPLETE" == "true" ]]; then
 
   echo "🎉 HugePages active — VM running with ${TARGET_RAM_GIB}GB RAM (83% host)"
 
-  
   # # Configure auto restart
   # if [[ -f "$AUTO_RESTART_SCRIPT" ]]; then
   #   echo ""
