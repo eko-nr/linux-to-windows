@@ -104,7 +104,7 @@ else
   SWAP_LIMIT_MB=$((RAM_TOTAL_MB*SWAP_LIMIT_PERCENT/100))
 fi
 
-SYSTEMD_CPU_QUOTA=$((CPU_COUNT * CPU_LIMIT_PERCENT))
+CPU_QUOTA_PERCENT=${CPU_LIMIT_PERCENT}
 
 ok "Host: ${CPU_COUNT} cores, ${RAM_TOTAL_MB}MB RAM"
 ok "Limit per VM: ~$((RAM_LIMIT_PER_VM_MB/1024))GB RAM, ${CPU_LIMIT_PERCENT}% CPU"
@@ -123,17 +123,19 @@ else
     echo "📌 Single VM - applying direct limit"
     SINGLE_SCOPE=$(echo "$QEMU_SCOPES" | head -n1)
     systemctl set-property "$SINGLE_SCOPE" \
-      CPUQuota=${SYSTEMD_CPU_QUOTA}% \
+      CPUQuota=${CPU_LIMIT_PERCENT}% \
       MemoryMax=${RAM_LIMIT_MB}M \
       MemorySwapMax=${SWAP_LIMIT_MB}M 2>/dev/null && \
       ok "INSTANT limit applied to $SINGLE_SCOPE" || warn "Failed to apply instant limit"
+
   else
     echo "📌 Multiple VMs - applying to machine.slice (dynamic sharing)"
     systemctl set-property machine.slice \
-      CPUQuota=${SYSTEMD_CPU_QUOTA}% \
+      CPUQuota=${CPU_LIMIT_PERCENT}% \
       MemoryMax=${RAM_LIMIT_MB}M \
       MemorySwapMax=${SWAP_LIMIT_MB}M 2>/dev/null && \
       ok "INSTANT limit applied to machine.slice (all VMs share)" || warn "Failed to apply instant limit"
+
   fi
 fi
 
@@ -176,21 +178,35 @@ for VM in $VM_LIST; do
   
   # Start if not running
   if ! virsh domstate "$VM" 2>/dev/null | grep -q running; then
+    # Prepare HugePages BEFORE starting VM
+    VM_XML_MEM=$(virsh dumpxml "$VM" \
+    | awk -F'[<>]' '/<memory unit='\''KiB'\''>/ {print $3; exit}')
+
+    if [[ -n "$VM_XML_MEM" ]]; then
+        PAGES=$(( VM_XML_MEM / 2048 ))
+        echo "$PAGES" > /proc/sys/vm/nr_hugepages
+        echo "[HugePages] Allocated $PAGES pages (for $VM)" | systemd-cat -t vm-monitor
+    else
+        echo "[HugePages] Unable to read memory for $VM" | systemd-cat -t vm-monitor
+    fi
+
     virsh start "$VM" && ok "VM started" || warn "Could not start VM"
-    sleep 3
-    
+    sleep 5
+
+    # Optional: free unused HugePages (in-use pages akan tetap kepakai oleh VM)
+    echo 0 > /proc/sys/vm/nr_hugepages || true
+
     # Apply instant limit to newly started VM
     NEW_SCOPE=$(systemctl list-units --type=scope | grep -i "$VM" | awk '{print $1}' | head -n1)
     if [[ -n "$NEW_SCOPE" ]]; then
       systemctl set-property "$NEW_SCOPE" \
-        CPUQuota=${SYSTEMD_CPU_QUOTA}% \
+        CPUQuota=${CPU_LIMIT_PERCENT}% \
         MemoryMax=${RAM_LIMIT_MB}M \
         MemorySwapMax=${SWAP_LIMIT_MB}M 2>/dev/null && \
         ok "Instant limit applied to newly started VM" || true
     fi
   fi
 done
-
 # ============================================================
 header "8. Creating systemd per-VM services"
 
@@ -228,17 +244,31 @@ cat > "$MONITOR_SCRIPT" <<EOMONITOR
 #!/bin/bash
 # VM monitor: auto-restart + reapply limits
 
-CPU_QUOTA=${SYSTEMD_CPU_QUOTA}
+CPU_QUOTA=${CPU_LIMIT_PERCENT}
 RAM_LIMIT=${RAM_LIMIT_MB}
 SWAP_LIMIT=${SWAP_LIMIT_MB}
 
 while true; do
   for VM in \$(virsh list --all --name | grep -v '^$'); do
     if virsh dominfo "\$VM" 2>/dev/null | grep -q "Autostart:.*enable"; then
-      if ! virsh domstate "\$VM" 2>/dev/null | grep -q running; then
+        if ! virsh domstate "\$VM" 2>/dev/null | grep -q running; then
         echo "[\$(date)] VM \$VM is down, restarting..." | systemd-cat -t vm-monitor
+
+        # Prepare HugePages based on VM XML memory (if using HugePages)
+        VM_XML_MEM=\$(virsh dumpxml "\$VM" | awk -F'[<>]' '/<memory unit='"'"'KiB'"'"'>/ {print \$3; exit}')
+        if [[ -n "\$VM_XML_MEM" ]]; then
+          PAGES=\$(( VM_XML_MEM / 2048 ))
+          echo "\$PAGES" > /proc/sys/vm/nr_hugepages
+          echo "[\$(date)] [HugePages] Allocated \$PAGES pages for \$VM" | systemd-cat -t vm-monitor
+        else
+          echo "[\$(date)] [HugePages] Unable to read memory for \$VM" | systemd-cat -t vm-monitor
+        fi
+
         virsh start "\$VM" 2>/dev/null
         sleep 5
+
+        # Optional: free unused HugePages (in-use stay pinned)
+        echo 0 > /proc/sys/vm/nr_hugepages 2>/dev/null || true
         
         # Reapply instant limit after restart
         SCOPE=\$(systemctl list-units --type=scope | grep -i "\$VM" | awk '{print \$1}' | head -n1)
@@ -247,6 +277,7 @@ while true; do
             CPUQuota=\${CPU_QUOTA}% \
             MemoryMax=\${RAM_LIMIT}M \
             MemorySwapMax=\${SWAP_LIMIT}M 2>/dev/null
+
           echo "[\$(date)] Reapplied limits to \$VM" | systemd-cat -t vm-monitor
         fi
       fi
@@ -288,12 +319,8 @@ header "11. Creating rc.local fallback"
 
 cat > /etc/rc.local <<'EORCLOCAL'
 #!/bin/bash
-sleep 10
-for vm in $(virsh list --all --name | grep -v '^$'); do
-  if virsh dominfo "$vm" 2>/dev/null | grep -q "Autostart:.*enable"; then
-    virsh start "$vm" >/dev/null 2>&1
-  fi
-done
+# Do nothing, VM starts handled by libvirt + vm-monitor.service
+sleep 1
 exit 0
 EORCLOCAL
 
@@ -305,7 +332,7 @@ ok "rc.local fallback created"
 header "✅ CONFIGURATION COMPLETE"
 echo ""
 echo "📊 Applied Limits:"
-echo "   • CPU: ${CPU_LIMIT_PERCENT}% (${SYSTEMD_CPU_QUOTA}% quota)"
+echo "   • CPU: ${CPU_LIMIT_PERCENT}% (systemd CPUQuota)"
 echo "   • RAM: ${RAM_LIMIT_MB}MB (~${RAM_LIMIT_PERCENT}%)"
 echo "   • SWAP: ${SWAP_LIMIT_MB}MB (~${SWAP_LIMIT_PERCENT}%)"
 echo ""
