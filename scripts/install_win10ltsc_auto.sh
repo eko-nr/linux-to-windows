@@ -1011,10 +1011,14 @@ if true; then
 
   sed -i '/<memoryBacking>/,/<\/memoryBacking>/d' "${XML_TMP}"
 
-  sed -i "/<vcpu /a\\
+  sed -i "/<memory unit='KiB'>/a\\
   <memoryBacking>\\
     <hugepages/>\\
   </memoryBacking>" "${XML_TMP}"
+
+  echo "==== DEBUG: memoryBacking in XML_TMP ===="
+  grep -n "memoryBacking" "${XML_TMP}" || echo "NO memoryBacking in XML_TMP"
+  echo "========================================="
 
   TARGET_RAM_KIB=$(( TARGET_RAM_GIB * 1024 * 1024 ))
 
@@ -1034,7 +1038,7 @@ if true; then
   virsh start "${VM_NAME}" >/dev/null 2>&1 || true
 
   echo "🎉 HugePages active — VM running with ${TARGET_RAM_GIB}GB RAM (83% host)"
-
+  
   # # Configure auto restart
   # if [[ -f "$AUTO_RESTART_SCRIPT" ]]; then
   #   echo ""
