@@ -4,8 +4,6 @@ echo "Select the Windows version you want to install:"
 echo "1) Windows 10 LTSC Auto Install (Less prompt config)"
 echo "2) Windows 10 LTSC"
 echo "3) Windows 10 Tiny"
-echo "4) Windows 10 Neon"
-echo "5) Windows 10 Atlas"
 
 read -p "Enter your choice: " choice
 
@@ -21,14 +19,6 @@ case $choice in
   3)
     echo "Starting installation for Windows 10 Tiny..."
     bash scripts/install_win10tiny.sh
-    ;;
-  4)
-    echo "Starting installation for Windows 10 Neon..."
-    bash scripts/install_win10neon.sh
-    ;;
-  5)
-    echo "Starting installation for Windows 10 Atlas..."
-    bash scripts/install_win10atlas.sh
     ;;
   *)
     echo "Invalid choice. Please run the script again"

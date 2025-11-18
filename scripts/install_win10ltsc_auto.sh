@@ -87,8 +87,8 @@ WIN_COMPUTERNAME=${WIN_COMPUTERNAME:-WIN10-LTSC}
 # --- VM Config (AUTO) ---
 header "VM Configuration (AUTO)"
 
-# RAM: 95% total, dengan guard minimal sisa 300MB untuk host
-RAM_CALC=$(( TOTAL_RAM_MB * 95 / 100 ))
+# RAM: 85% total, dengan guard minimal sisa 300MB untuk host
+RAM_CALC=$(( TOTAL_RAM_MB * 85 / 100 ))
 SAFE_CAP=$(( TOTAL_RAM_MB - 300 ))
 (( SAFE_CAP < 300 )) && SAFE_CAP=300
 if (( RAM_CALC > SAFE_CAP )); then
@@ -103,12 +103,6 @@ echo "Allocated RAM (auto): ${RAM_SIZE} MB (~${RAM_PERCENT}% of total)"
 # vCPU: all cores
 VCPU_COUNT=$TOTAL_CPUS
 echo "Allocated vCPUs (auto): ${VCPU_COUNT}"
-
-# Swap: 35% of total RAM (GB), floor, min 1GB
-TOTAL_RAM_GB=$(( (TOTAL_RAM_MB + 1023) / 1024 ))
-SWAP_SIZE=$(( TOTAL_RAM_GB * 45 / 100 ))
-(( SWAP_SIZE < 1 )) && SWAP_SIZE=1
-echo "Allocated Swap (auto): ${SWAP_SIZE} GB (~35% of RAM)"
 
 # --- SAFE ISO SIZE FALLBACKS ---
 ISO_CACHE="/opt/vm-isos"
@@ -131,14 +125,14 @@ ISO_TOTAL_SIZE=$(( ISO_WIN_SIZE_GB + ISO_VIRTIO_SIZE_GB ))
 (( ISO_TOTAL_SIZE < 1 )) && ISO_TOTAL_SIZE=4   # fallback default total 4GB
 echo "Detected ISO total size: ${ISO_TOTAL_SIZE} GB"
 
-# Disk: free disk - swap - iso - 5GB (minimum 20GB)
-if (( FREE_DISK_GB > (SWAP_SIZE + ISO_TOTAL_SIZE + 5) )); then
-  DISK_SIZE=$(( FREE_DISK_GB - SWAP_SIZE - ISO_TOTAL_SIZE - 5 ))
+# Disk: free disk - iso - 5GB (minimum 20GB)
+if (( FREE_DISK_GB > (ISO_TOTAL_SIZE + 5) )); then
+  DISK_SIZE=$(( FREE_DISK_GB - ISO_TOTAL_SIZE - 5 ))
 else
   DISK_SIZE=20
 fi
 (( DISK_SIZE < 20 )) && DISK_SIZE=20
-echo "Allocated Disk (auto): ${DISK_SIZE} GB (free=${FREE_DISK_GB}G, -swap=${SWAP_SIZE}G, -iso=${ISO_TOTAL_SIZE}G, -host=5G)"
+echo "Allocated Disk (auto): ${DISK_SIZE} GB (free=${FREE_DISK_GB}G, -iso=${ISO_TOTAL_SIZE}G, -host=5G)"
 
 # RDP port (PROMPT KEPT)
 echo "🔧 Configure public RDP base port mapping"
@@ -313,19 +307,6 @@ else
   warn "⚠ libvirt not fully functional — installing system version as fallback"
   sudo apt install -y libvirt-daemon-system libvirt-clients
   sudo systemctl enable --now libvirtd virtqemud
-fi
-
-# --- Swap setup (AUTO) ---
-header "Configuring Swap (AUTO)"
-if [[ ! -f /swapfile ]]; then
-  sudo fallocate -l ${SWAP_SIZE}G /swapfile
-  sudo chmod 600 /swapfile
-  sudo mkswap /swapfile
-  sudo swapon /swapfile
-  echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null
-  ok "Swap ${SWAP_SIZE}G created"
-else
-  ok "Swap already exists"
 fi
 
 # --- ISO Cache ---
@@ -977,6 +958,49 @@ fi
 
 echo ""
 if [[ "$INSTALL_COMPLETE" == "true" ]]; then
+    echo ""
+  echo "🔧 Applying HugePages + RAM limit (85%)..."
+
+  TARGET_RAM_MB=$(( TOTAL_RAM_MB * 85 / 100 ))
+  TARGET_RAM_GIB=$(( TARGET_RAM_MB / 1024 ))
+  [[ $TARGET_RAM_GIB -lt 4 ]] && TARGET_RAM_GIB=4
+
+  echo "→ Target VM RAM: ${TARGET_RAM_GIB} GB (85% of host)"
+
+  HUGE_PAGES=$(( TARGET_RAM_GIB * 1024 / 2 ))
+  echo "→ Allocating HugePages: ${HUGE_PAGES} x 2MB pages"
+
+  echo "${HUGE_PAGES}" > /proc/sys/vm/nr_hugepages
+  sysctl -w vm.nr_hugepages="${HUGE_PAGES}" >/dev/null || true
+
+  echo "✓ HugePages allocated"
+
+  XML_TMP=$(mktemp)
+  virsh dumpxml "${VM_NAME}" > "${XML_TMP}"
+
+  sed -i '/<memoryBacking>/,/<\/memoryBacking>/d' "${XML_TMP}"
+
+  sed -i '/<devices>/i \
+  <memoryBacking>\n    <hugepages/>\n  </memoryBacking>' "${XML_TMP}"
+
+  TARGET_RAM_KIB=$(( TARGET_RAM_GIB * 1024 * 1024 ))
+
+  sed -i "s|<memory[^>]*>.*</memory>|<memory unit='KiB'>${TARGET_RAM_KIB}</memory>|" "${XML_TMP}"
+  sed -i "s|<currentMemory[^>]*>.*</currentMemory>|<currentMemory unit='KiB'>${TARGET_RAM_KIB}</currentMemory>|" "${XML_TMP}"
+
+  virsh define "${XML_TMP}" >/dev/null
+  rm -f "${XML_TMP}"
+
+  echo "✓ XML updated → VM now uses HugePages + ${TARGET_RAM_GIB}GB RAM"
+
+  echo "🔄 Restarting VM with HugePages..."
+  virsh shutdown "${VM_NAME}" >/dev/null 2>&1 || true
+  sleep 5
+  virsh start "${VM_NAME}" >/dev/null 2>&1 || true
+
+  echo "🎉 HugePages active — VM running with ${TARGET_RAM_GIB}GB RAM (85% host)"
+
+
   header "Installation Complete!"
   ok "Windows 10 Ltsc installed successfully!"
   echo ""
@@ -1005,7 +1029,7 @@ echo -e "${BLUE}Resource Allocation:${NC}"
 echo "  RAM: ${RAM_SIZE} MB (~${RAM_PERCENT}% of ${TOTAL_RAM_MB} MB)"
 echo "  vCPUs: ${VCPU_COUNT} of ${TOTAL_CPUS}"
 echo "  Disk: ${DISK_SIZE} GB"
-echo "  Swap: ${SWAP_SIZE} GB"
+
 echo ""
 echo -e "${BLUE}Performance Features:${NC}"
 echo "  ✓ KVM hardware virtualization"
