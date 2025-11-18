@@ -84,9 +84,9 @@ header "2. Installing dependencies"
 
 if command -v apt-get >/dev/null 2>&1; then
   apt-get update >/dev/null 2>&1
-  apt-get install -y bc libvirt-clients >/dev/null 2>&1
+  apt-get install -y bc >/dev/null 2>&1
 else
-  warn "apt-get not found; please make sure bc + libvirt-clients are installed manually"
+  warn "apt-get not found; please make sure bc are installed manually"
 fi
 
 if ! command -v virsh >/dev/null 2>&1; then
