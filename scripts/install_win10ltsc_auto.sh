@@ -642,15 +642,15 @@ sudo umount "$FLOPPY_MOUNT" || true
 sudo rmdir "$FLOPPY_MOUNT" 2>/dev/null || true
 ok "Floppy image created: ${FLOPPY_IMG}"
 
+# --- Remove old VM ---
+sudo virsh destroy ${VM_NAME} 2>/dev/null || true
+sudo virsh undefine ${VM_NAME} --nvram --remove-all-storage 2>/dev/null || true
+
 # --- Create Disk ---
 header "Creating VM Disk"
 sudo mkdir -p /var/lib/libvirt/images
 sudo qemu-img create -f qcow2 /var/lib/libvirt/images/${VM_NAME}.img ${DISK_SIZE}G
 ok "Disk ${DISK_SIZE}G ready"
-
-# --- Remove old VM ---
-sudo virsh destroy ${VM_NAME} 2>/dev/null || true
-sudo virsh undefine ${VM_NAME} --nvram --remove-all-storage 2>/dev/null || true
 
 # --- Fix AppArmor issue ---
 header "Fixing AppArmor configuration"
@@ -958,7 +958,7 @@ fi
 
 echo ""
 if [[ "$INSTALL_COMPLETE" == "true" ]]; then
-    echo ""
+  echo ""
   echo "🔧 Applying HugePages + RAM limit (85%)..."
 
   TARGET_RAM_MB=$(( TOTAL_RAM_MB * 85 / 100 ))
@@ -979,9 +979,10 @@ if [[ "$INSTALL_COMPLETE" == "true" ]]; then
   virsh dumpxml "${VM_NAME}" > "${XML_TMP}"
 
   sed -i '/<memoryBacking>/,/<\/memoryBacking>/d' "${XML_TMP}"
-
-  sed -i '/<devices>/i \
-  <memoryBacking>\n    <hugepages/>\n  </memoryBacking>' "${XML_TMP}"
+  sed -i '/<devices>/i\
+  <memoryBacking>\
+    <hugepages/>\
+  </memoryBacking>' "${XML_TMP}"
 
   TARGET_RAM_KIB=$(( TARGET_RAM_GIB * 1024 * 1024 ))
 
@@ -1000,7 +1001,6 @@ if [[ "$INSTALL_COMPLETE" == "true" ]]; then
 
   echo "🎉 HugePages active — VM running with ${TARGET_RAM_GIB}GB RAM (85% host)"
 
-
   header "Installation Complete!"
   ok "Windows 10 Ltsc installed successfully!"
   echo ""
@@ -1016,50 +1016,24 @@ if [[ "$INSTALL_COMPLETE" == "true" ]]; then
   echo "  ✓ Remote Desktop (RDP) enabled"
   echo "  ✓ Windows Firewall disabled"
   echo "  ✓ Network configured automatically"
+  
+  echo ""
+  echo -e "${BLUE}Resource Allocation:${NC}"
+  echo "  RAM (install phase): ${RAM_SIZE} MB (~${RAM_PERCENT}% of ${TOTAL_RAM_MB} MB)"
+  echo "  RAM (final hugepages): ${TARGET_RAM_GIB} GB (85% of host)"
+  echo "  vCPUs: ${VCPU_COUNT} of ${TOTAL_CPUS}"
+  echo "  Disk: ${DISK_SIZE} GB"
+
 else
   warn "Installation monitoring timed out after $(( MAX_CHECKS * 10 / 60 )) minutes"
   echo ""
   echo "Please check VM status manually:"
   echo "  sudo virsh list --all"
   echo "  sudo virsh domifaddr ${VM_NAME}"
-fi
 
-echo ""
-echo -e "${BLUE}Resource Allocation:${NC}"
-echo "  RAM: ${RAM_SIZE} MB (~${RAM_PERCENT}% of ${TOTAL_RAM_MB} MB)"
-echo "  vCPUs: ${VCPU_COUNT} of ${TOTAL_CPUS}"
-echo "  Disk: ${DISK_SIZE} GB"
-
-echo ""
-echo -e "${BLUE}Performance Features:${NC}"
-echo "  ✓ KVM hardware virtualization"
-echo "  ✓ VirtIO drivers (network + storage)"
-echo "  ✓ Host CPU passthrough"
-echo "  ✓ vhost-net acceleration + multiqueue (${VCPU_COUNT})"
-echo "  ✓ Hyper-V enlightenments"
-echo ""
-echo -e "${BLUE}Cached Files:${NC}"
-echo "  Windows ISO: ${ISO_FILE}"
-echo "  VirtIO Drivers: ${VIRTIO_FILE}"
-echo "  Autounattend Floppy: ${FLOPPY_IMG}"
-echo ""
-ok "Setup complete! VM is ready to use."
-
-# Configure auto restart
-if [[ -f "$AUTO_RESTART_SCRIPT" ]]; then
   echo ""
-  echo "🚀 Configuring VM auto-restart..."
-  sudo bash "$AUTO_RESTART_SCRIPT"
-else
-  echo "No auto restart when vm stopped"
-fi
-
-# Configure port forward
-if [[ -f "$PORT_FORWARD_SCRIPT" ]]; then
-  echo ""
-  echo "🚀 Configuring RDP port forwarding..."
-  sudo bash "$PORT_FORWARD_SCRIPT" "$RDP_PORT"
-else
-  warn "enable_port_forward_rdp.sh not found in $SCRIPT_DIR. Skipping auto-configuration."
-  echo "Download and run manually when VM is ready."
+  echo -e "${BLUE}Resource Allocation:${NC}"
+  echo "  RAM (install phase): ${RAM_SIZE} MB (~${RAM_PERCENT}% of ${TOTAL_RAM_MB} MB)"
+  echo "  vCPUs: ${VCPU_COUNT} of ${TOTAL_CPUS}"
+  echo "  Disk: ${DISK_SIZE} GB"
 fi
