@@ -985,6 +985,7 @@ else
   echo "   sudo virsh domifaddr ${VM_NAME}"
 fi
 
+
 echo ""
 if true; then
   echo ""
@@ -1009,9 +1010,10 @@ if true; then
   virsh dumpxml "${VM_NAME}" > "${XML_TMP}"
 
   sed -i '/<memoryBacking>/,/<\/memoryBacking>/d' "${XML_TMP}"
-  sed -i "/<currentMemory/a\
-  <memoryBacking>\n\
-    <hugepages/>\n\
+
+  sed -i "/<vcpu /a\\
+  <memoryBacking>\\
+    <hugepages/>\\
   </memoryBacking>" "${XML_TMP}"
 
   TARGET_RAM_KIB=$(( TARGET_RAM_GIB * 1024 * 1024 ))
@@ -1019,10 +1021,10 @@ if true; then
   sed -i "s|\(<memory unit='KiB'>\)[0-9]\+\(</memory>\)|\1${TARGET_RAM_KIB}\2|" "${XML_TMP}"
   sed -i "s|\(<currentMemory unit='KiB'>\)[0-9]\+\(</currentMemory>\)|\1${TARGET_RAM_KIB}\2|" "${XML_TMP}"
 
-  if ! virsh define "${XML_TMP}"; then
-    echo "❌ virsh define failed, check ${XML_TMP}"
-  else
+  if virsh define "${XML_TMP}"; then
     echo "✓ XML updated → VM now uses HugePages + ${TARGET_RAM_GIB}GB RAM"
+  else
+    echo "❌ virsh define failed, check ${XML_TMP}"
   fi
   rm -f "${XML_TMP}"
 
