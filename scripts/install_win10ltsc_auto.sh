@@ -1020,26 +1020,6 @@ else
   echo "   sudo virsh domifaddr ${VM_NAME}"
 fi
 
-header "Configuring Host Swap (4GB)"
-SWAPFILE="/swapfile"
-SWAPSIZE_GB=4
-
-if grep -q "$SWAPFILE" /etc/fstab; then
-  ok "Swapfile already configured in fstab"
-else
-  if [[ ! -f "$SWAPFILE" ]]; then
-    echo "→ Creating ${SWAPSIZE_GB}GB swapfile..."
-    fallocate -l ${SWAPSIZE_GB}G "$SWAPFILE" 2>/dev/null \
-      || dd if=/dev/zero of="$SWAPFILE" bs=1G count=$SWAPSIZE_GB
-    chmod 600 "$SWAPFILE"
-    mkswap "$SWAPFILE"
-  fi
-
-  echo "$SWAPFILE none swap sw 0 0" | tee -a /etc/fstab >/dev/null
-  swapon "$SWAPFILE"
-  ok "Swapfile enabled (4GB)"
-fi
-
 echo ""
 if true; then
   echo ""
