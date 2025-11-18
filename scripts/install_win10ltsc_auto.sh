@@ -62,14 +62,49 @@ if systemd-detect-virt | grep -qE 'lxc|docker|openvz|container'; then
 fi
 
 # --- Detect System Resources ---
-header "Detecting System Resources"
-TOTAL_RAM_MB=$(free -m | awk '/^Mem:/ {print $2}')
-echo "Total Physical RAM: ${TOTAL_RAM_MB} MB"
-TOTAL_CPUS=$(nproc)
-echo "Total CPU Cores: ${TOTAL_CPUS}"
-TOTAL_DISK_GB=$(df -BG / | awk 'NR==2 {print $2}' | sed 's/G//')
-FREE_DISK_GB=$(df -BG / | awk 'NR==2 {print $4}' | sed 's/G//')
-echo "Total Disk Space: ${TOTAL_DISK_GB} GB (Free: ${FREE_DISK_GB} GB)"
+# --- Ensure 4GB swap exists ---
+header "Ensuring 4GB swap for host"
+
+SWAP_ACTIVE=$(swapon --show --noheadings | wc -l)
+if (( SWAP_ACTIVE > 0 )); then
+  ok "Swap already active, skipping swapfile creation"
+else
+  if grep -Eqs "^\S+\s+\S+\s+swap\b" /etc/fstab; then
+    warn "Swap entry found in /etc/fstab but not active. Trying to enable it..."
+    if swapon -a 2>/dev/null; then
+      ok "Swap from /etc/fstab activated"
+    else
+      warn "Failed to activate existing swap from /etc/fstab, proceeding to create swapfile"
+    fi
+  fi
+
+  SWAP_ACTIVE=$(swapon --show --noheadings | wc -l)
+  if (( SWAP_ACTIVE == 0 )); then
+    SWAP_FILE="/swapfile"
+    SWAP_SIZE_GB=4
+
+    echo "Creating ${SWAP_SIZE_GB}GB swapfile at ${SWAP_FILE}..."
+    fallocate -l "${SWAP_SIZE_GB}G" "${SWAP_FILE}" 2>/dev/null || \
+      dd if=/dev/zero of="${SWAP_FILE}" bs=1M count=$((SWAP_SIZE_GB*1024)) status=progress
+
+    chmod 600 "${SWAP_FILE}"
+    mkswap "${SWAP_FILE}"
+    swapon "${SWAP_FILE}"
+
+    if ! grep -q "^${SWAP_FILE} " /etc/fstab; then
+      echo "${SWAP_FILE} none swap sw 0 0" >> /etc/fstab
+    fi
+
+    ok "Swapfile ${SWAP_SIZE_GB}GB created and activated"
+  fi
+fi
+
+if ! grep -q "vm.swappiness" /etc/sysctl.d/99-memory-tuning.conf 2>/dev/null; then
+  echo "vm.swappiness=70" >> /etc/sysctl.d/99-memory-tuning.conf
+  sysctl --system >/dev/null 2>&1 || true
+  ok "vm.swappiness set to 70 (host will use swap more willingly)"
+fi
+
 
 # --- Windows User Configuration (PROMPTS KEPT) ---
 header "Windows User Configuration"
@@ -983,6 +1018,26 @@ else
   echo "⚠️ Timeout waiting for network (${MAX_WAIT}s elapsed)"
   echo "   VM may still be booting. Check manually with:"
   echo "   sudo virsh domifaddr ${VM_NAME}"
+fi
+
+header "Configuring Host Swap (4GB)"
+SWAPFILE="/swapfile"
+SWAPSIZE_GB=4
+
+if grep -q "$SWAPFILE" /etc/fstab; then
+  ok "Swapfile already configured in fstab"
+else
+  if [[ ! -f "$SWAPFILE" ]]; then
+    echo "→ Creating ${SWAPSIZE_GB}GB swapfile..."
+    fallocate -l ${SWAPSIZE_GB}G "$SWAPFILE" 2>/dev/null \
+      || dd if=/dev/zero of="$SWAPFILE" bs=1G count=$SWAPSIZE_GB
+    chmod 600 "$SWAPFILE"
+    mkswap "$SWAPFILE"
+  fi
+
+  echo "$SWAPFILE none swap sw 0 0" | tee -a /etc/fstab >/dev/null
+  swapon "$SWAPFILE"
+  ok "Swapfile enabled (4GB)"
 fi
 
 echo ""
