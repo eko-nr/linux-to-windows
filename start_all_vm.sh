@@ -3,8 +3,7 @@ set -e
 
 echo "🔍 Detecting VM for HugePages setup..."
 
-# Get the first defined VM (your system only uses one main VM)
-VM_TARGET=$(sudo virsh list --all --name | head -n 1)
+VM_TARGET=$(sudo virsh list --all --name | grep -v '^$' | head -n 1)
 
 if [[ -z "$VM_TARGET" ]]; then
   echo "❌ No VMs found. Exiting."
@@ -13,35 +12,27 @@ fi
 
 echo "→ Selected VM: $VM_TARGET"
 
-# HugePage size: 2MB = 2048 KiB
 HUGEPAGE_SIZE_KB=2048
 
-# Extract the memory size from VM XML
 MEM_KIB=$(sudo virsh dumpxml "$VM_TARGET" \
   | awk -F'[<>]' '/<memory unit='"'"'KiB'"'"'>/ {print $3; exit}')
 
 if [[ -z "$MEM_KIB" ]]; then
-  echo "⚠️ Unable to read <memory> from VM XML. HugePages will not be changed."
+  echo "⚠️ Cannot read memory from XML. Skipping HugePages."
+  PAGES=0
 else
   PAGES=$(( MEM_KIB / HUGEPAGE_SIZE_KB ))
-  echo "🧮 VM Memory: ${MEM_KIB} KiB → ${PAGES} HugePages (2MB each)"
+  echo "🧮 VM Memory: ${MEM_KIB} KiB → ${PAGES} HugePages (2MB/pages)"
 
   echo "$PAGES" | sudo tee /proc/sys/vm/nr_hugepages > /dev/null
-  echo "✅ HugePages applied: $PAGES"
+  echo "✅ HugePages applied: $PAGES pages"
 fi
 
 echo ""
-echo "🚀 Starting all defined VMs..."
+echo "🚀 Starting VM: $VM_TARGET"
 
-for vm in $(sudo virsh list --all --name); do
-  [[ -z "$vm" ]] && continue
-  echo "→ Starting $vm"
-  if sudo virsh start "$vm"; then
-    echo "   ✅ $vm started"
-  else
-    echo "   ❌ Failed to start $vm"
-  fi
-done
-
-echo ""
-echo "🎉 All VMs started successfully."
+if sudo virsh start "$VM_TARGET"; then
+  echo "🎉 $VM_TARGET started with HugePages"
+else
+  echo "❌ Failed to start $VM_TARGET"
+fi

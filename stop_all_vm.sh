@@ -9,4 +9,10 @@ for vm in $(sudo virsh list --name); do
   sudo virsh destroy "$vm"
 done
 
+echo "🧹 Clearing HugePages..."
+echo 0 | sudo tee /proc/sys/vm/nr_hugepages >/dev/null
+
+echo "✓ VM stopped"
+echo "✓ HugePages cleared"
+
 echo "All VMs have been stopped, and hugepages reset to 0."

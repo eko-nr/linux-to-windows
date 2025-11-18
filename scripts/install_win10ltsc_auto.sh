@@ -985,101 +985,155 @@ else
   echo "   sudo virsh domifaddr ${VM_NAME}"
 fi
 
-
 echo ""
 if true; then
   echo ""
-  echo "🔧 Applying HugePages + RAM limit (83%)..."
+  echo "🔧 Applying HugePages + RAM limit (max 83% host, 100% backed by HugePages)..."
 
+  # Target: 83% dari RAM host (minimum 4GB)
   TARGET_RAM_MB=$(( TOTAL_RAM_MB * 83 / 100 ))
   TARGET_RAM_GIB=$(( TARGET_RAM_MB / 1024 ))
   [[ $TARGET_RAM_GIB -lt 4 ]] && TARGET_RAM_GIB=4
 
-  echo "→ Target VM RAM: ${TARGET_RAM_GIB} GB (83% of host)"
+  echo "→ Target VM RAM (theoretical): ${TARGET_RAM_GIB} GB (~83% of host)"
 
-  HUGE_PAGES=$(( TARGET_RAM_GIB * 1024 / 2 ))
-  echo "→ Allocating HugePages: ${HUGE_PAGES} x 2MB pages"
+  # Hitung HugePages 2MB
+  # 1 GiB = 1024 MiB → 1024 / 2 = 512 pages per GiB
+  HUGE_PAGES=$(( TARGET_RAM_GIB * 512 ))
+  echo "→ Requesting HugePages: ${HUGE_PAGES} x 2MB pages"
+
+  echo "⏸️  Stopping VM before applying HugePages..."
+  virsh destroy "${VM_NAME}" >/dev/null 2>&1 || true
+  sleep 2
+
+  echo "🧹 Resetting previous HugePages on host..."
+  echo 0 > /proc/sys/vm/nr_hugepages
+  sync
+  echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
+  sleep 1
 
   if ! echo "${HUGE_PAGES}" > /proc/sys/vm/nr_hugepages 2>/dev/null; then
-    echo "❌ failed set nr_hugepages"
+    echo "❌ Failed to set nr_hugepages=${HUGE_PAGES}"
+    echo "   Starting VM WITHOUT HugePages (host cannot satisfy request)."
+    virsh start "${VM_NAME}" >/dev/null 2>&1 || true
   else
-    echo "✓ HugePages allocated"
+    echo "✓ HugePages allocation requested on host"
   fi
 
-  XML_TMP=$(mktemp)
-  virsh dumpxml "${VM_NAME}" > "${XML_TMP}"
+  grep HugePages_ /proc/meminfo || true
 
-  sed -i '/<memoryBacking>/,/<\/memoryBacking>/d' "${XML_TMP}"
+  # Cek berapa HugePages yang beneran kepasang
+  ACTUAL_PAGES=$(grep HugePages_Total /proc/meminfo | awk '{print $2}')
+  if [[ -z "${ACTUAL_PAGES}" ]]; then
+    ACTUAL_PAGES=0
+  fi
 
-  sed -i "/<memory unit='KiB'>/a\\
-  <memoryBacking>\\
-    <hugepages/>\\
+  if (( ACTUAL_PAGES <= 0 )); then
+    echo "❌ Host failed to allocate any HugePages. Starting VM WITHOUT HugePages."
+    virsh start "${VM_NAME}" >/dev/null 2>&1 || true
+
+    header "Installation Complete!"
+    ok "Windows 10 Ltsc installed (no HugePages)."
+    echo ""
+    echo -e "${BLUE}VM Details:${NC}"
+    echo "  Name: ${VM_NAME}"
+    echo "  Computer Name: ${WIN_COMPUTERNAME}"
+    echo "  Username: ${WIN_USERNAME}"
+    echo "  Password: [hidden]"
+    echo "  IP Address: ${VM_IP:-unknown}"
+    echo ""
+    echo -e "${GREEN}✅ Auto-configured features:${NC}"
+    echo "  ✓ VirtIO storage & network drivers"
+    echo "  ✓ Remote Desktop (RDP) enabled"
+    echo "  ✓ Windows Firewall disabled"
+    echo "  ✓ Network configured automatically"
+    echo ""
+    echo -e "${BLUE}Resource Allocation:${NC}"
+    echo "  RAM (install phase): ${RAM_SIZE} MB (~${RAM_PERCENT}% of ${TOTAL_RAM_MB} MB)"
+    echo "  RAM (final): ${RAM_SIZE} MB (HugePages OFF)"
+    echo "  vCPUs: ${VCPU_COUNT} of ${TOTAL_CPUS}"
+    echo "  Disk: ${DISK_SIZE} GB"
+  else
+    if (( ACTUAL_PAGES < HUGE_PAGES )); then
+      echo "⚠ Requested ${HUGE_PAGES} pages, but host only allocated ${ACTUAL_PAGES} pages."
+      echo "  VM RAM will be SHRUNK to fully match HugePages (100% backed)."
+    fi
+
+    # Hitung RAM final berdasarkan HugePages aktual
+    # ACTUAL_PAGES * 2MB = MiB → /1024 = GiB
+    TARGET_RAM_GIB=$(( ACTUAL_PAGES * 2 / 1024 ))
+    TARGET_RAM_KIB=$(( TARGET_RAM_GIB * 1024 * 1024 ))
+
+    echo "→ Final VM RAM (based on actual HugePages): ${TARGET_RAM_GIB} GB"
+    echo "→ memory/currentMemory will be set to: ${TARGET_RAM_KIB} KiB"
+
+    XML_TMP=$(mktemp)
+    virsh dumpxml "${VM_NAME}" > "${XML_TMP}"
+
+    # Bersihkan memoryBacking lama dulu
+    sed -i '/<memoryBacking>/,/<\/memoryBacking>/d' "${XML_TMP}"
+
+    # Inject memoryBacking baru dengan HugePages 2MiB
+    sed -i "/<currentMemory unit='KiB'>/a\
+  <memoryBacking>\n\
+    <hugepages>\n\
+      <page size='2' unit='MiB'/>\n\
+    </hugepages>\n\
   </memoryBacking>" "${XML_TMP}"
 
-  echo "==== DEBUG: memoryBacking in XML_TMP ===="
-  grep -n "memoryBacking" "${XML_TMP}" || echo "NO memoryBacking in XML_TMP"
-  echo "========================================="
+    echo "==== DEBUG: memoryBacking in XML_TMP ===="
+    grep -n "memoryBacking" "${XML_TMP}" || echo "NO memoryBacking in XML_TMP"
+    echo "========================================="
 
-  TARGET_RAM_KIB=$(( TARGET_RAM_GIB * 1024 * 1024 ))
+    # Set <memory> & <currentMemory> ke RAM final
+    sed -i "s|\(<memory unit='KiB'>\)[0-9]\+\(</memory>\)|\1${TARGET_RAM_KIB}\2|" "${XML_TMP}"
+    sed -i "s|\(<currentMemory unit='KiB'>\)[0-9]\+\(</currentMemory>\)|\1${TARGET_RAM_KIB}\2|" "${XML_TMP}"
 
-  sed -i "s|\(<memory unit='KiB'>\)[0-9]\+\(</memory>\)|\1${TARGET_RAM_KIB}\2|" "${XML_TMP}"
-  sed -i "s|\(<currentMemory unit='KiB'>\)[0-9]\+\(</currentMemory>\)|\1${TARGET_RAM_KIB}\2|" "${XML_TMP}"
+    if virsh define "${XML_TMP}"; then
+      echo "✓ XML updated → VM now uses HugePages + ${TARGET_RAM_GIB}GB RAM (100% backed)"
+    else
+      echo "❌ virsh define failed, check ${XML_TMP}"
+    fi
+    rm -f "${XML_TMP}"
 
-  if virsh define "${XML_TMP}"; then
-    echo "✓ XML updated → VM now uses HugePages + ${TARGET_RAM_GIB}GB RAM"
-  else
-    echo "❌ virsh define failed, check ${XML_TMP}"
-  fi
-  rm -f "${XML_TMP}"
+    echo "🚀 Starting VM with HugePages..."
+    virsh start "${VM_NAME}" >/dev/null 2>&1 || true
+    sleep 5
 
-  echo "🔄 Restarting VM with HugePages..."
-  virsh shutdown "${VM_NAME}" >/dev/null 2>&1 || true
-  sleep 5
-  virsh start "${VM_NAME}" >/dev/null 2>&1 || true
+    echo "🎉 HugePages active — VM running with ${TARGET_RAM_GIB}GB RAM (fully backed)"
 
-  echo "🎉 HugePages active — VM running with ${TARGET_RAM_GIB}GB RAM (83% host)"
-  
-  # # Configure auto restart
-  # if [[ -f "$AUTO_RESTART_SCRIPT" ]]; then
-  #   echo ""
-  #   echo "🚀 Configuring VM auto-restart..."
-  #   sudo bash "$AUTO_RESTART_SCRIPT"
-  # else
-  #   echo "No auto restart when vm stopped"
-  # fi
+    # Configure port forward
+    if [[ -f "$PORT_FORWARD_SCRIPT" ]]; then
+      echo ""
+      echo "🚀 Configuring RDP port forwarding..."
+      sudo bash "$PORT_FORWARD_SCRIPT" "$RDP_PORT"
+    else
+      warn "enable_port_forward_rdp.sh not found in $SCRIPT_DIR. Skipping auto-configuration."
+      echo "Download and run manually when VM is ready."
+    fi
 
-  # Configure port forward
-  if [[ -f "$PORT_FORWARD_SCRIPT" ]]; then
+    header "Installation Complete!"
+    ok "Windows 10 Ltsc installed successfully!"
     echo ""
-    echo "🚀 Configuring RDP port forwarding..."
-    sudo bash "$PORT_FORWARD_SCRIPT" "$RDP_PORT"
-  else
-    warn "enable_port_forward_rdp.sh not found in $SCRIPT_DIR. Skipping auto-configuration."
-    echo "Download and run manually when VM is ready."
+    echo -e "${BLUE}VM Details:${NC}"
+    echo "  Name: ${VM_NAME}"
+    echo "  Computer Name: ${WIN_COMPUTERNAME}"
+    echo "  Username: ${WIN_USERNAME}"
+    echo "  Password: [hidden]"
+    echo "  IP Address: ${VM_IP:-unknown}"
+    echo ""
+    echo -e "${GREEN}✅ Auto-configured features:${NC}"
+    echo "  ✓ VirtIO storage & network drivers"
+    echo "  ✓ Remote Desktop (RDP) enabled"
+    echo "  ✓ Windows Firewall disabled"
+    echo "  ✓ Network configured automatically"
+    echo ""
+    echo -e "${BLUE}Resource Allocation:${NC}"
+    echo "  RAM (install phase): ${RAM_SIZE} MB (~${RAM_PERCENT}% of ${TOTAL_RAM_MB} MB)"
+    echo "  RAM (final hugepages): ${TARGET_RAM_GIB} GB (100% backed by HugePages, <=83% host)"
+    echo "  vCPUs: ${VCPU_COUNT} of ${TOTAL_CPUS}"
+    echo "  Disk: ${DISK_SIZE} GB"
   fi
-
-  header "Installation Complete!"
-  ok "Windows 10 Ltsc installed successfully!"
-  echo ""
-  echo -e "${BLUE}VM Details:${NC}"
-  echo "  Name: ${VM_NAME}"
-  echo "  Computer Name: ${WIN_COMPUTERNAME}"
-  echo "  Username: ${WIN_USERNAME}"
-  echo "  Password: [hidden]"
-  echo "  IP Address: ${VM_IP:-unknown}"
-  echo ""
-  echo -e "${GREEN}✅ Auto-configured features:${NC}"
-  echo "  ✓ VirtIO storage & network drivers"
-  echo "  ✓ Remote Desktop (RDP) enabled"
-  echo "  ✓ Windows Firewall disabled"
-  echo "  ✓ Network configured automatically"
-  
-  echo ""
-  echo -e "${BLUE}Resource Allocation:${NC}"
-  echo "  RAM (install phase): ${RAM_SIZE} MB (~${RAM_PERCENT}% of ${TOTAL_RAM_MB} MB)"
-  echo "  RAM (final hugepages): ${TARGET_RAM_GIB} GB (83% of host)"
-  echo "  vCPUs: ${VCPU_COUNT} of ${TOTAL_CPUS}"
-  echo "  Disk: ${DISK_SIZE} GB"
 
 else
   warn "Installation monitoring timed out after $(( MAX_CHECKS * 10 / 60 )) minutes"
