@@ -87,8 +87,8 @@ WIN_COMPUTERNAME=${WIN_COMPUTERNAME:-WIN10-LTSC}
 # --- VM Config (AUTO) ---
 header "VM Configuration (AUTO)"
 
-# RAM: 85% total, dengan guard minimal sisa 300MB untuk host
-RAM_CALC=$(( TOTAL_RAM_MB * 85 / 100 ))
+# RAM: 83% total, dengan guard minimal sisa 300MB untuk host
+RAM_CALC=$(( TOTAL_RAM_MB * 83 / 100 ))
 SAFE_CAP=$(( TOTAL_RAM_MB - 300 ))
 (( SAFE_CAP < 300 )) && SAFE_CAP=300
 if (( RAM_CALC > SAFE_CAP )); then
@@ -959,13 +959,13 @@ fi
 echo ""
 if [[ "$INSTALL_COMPLETE" == "true" ]]; then
   echo ""
-  echo "🔧 Applying HugePages + RAM limit (85%)..."
+  echo "🔧 Applying HugePages + RAM limit (83%)..."
 
-  TARGET_RAM_MB=$(( TOTAL_RAM_MB * 85 / 100 ))
+  TARGET_RAM_MB=$(( TOTAL_RAM_MB * 83 / 100 ))
   TARGET_RAM_GIB=$(( TARGET_RAM_MB / 1024 ))
   [[ $TARGET_RAM_GIB -lt 4 ]] && TARGET_RAM_GIB=4
 
-  echo "→ Target VM RAM: ${TARGET_RAM_GIB} GB (85% of host)"
+  echo "→ Target VM RAM: ${TARGET_RAM_GIB} GB (83% of host)"
 
   HUGE_PAGES=$(( TARGET_RAM_GIB * 1024 / 2 ))
   echo "→ Allocating HugePages: ${HUGE_PAGES} x 2MB pages"
@@ -999,7 +999,27 @@ if [[ "$INSTALL_COMPLETE" == "true" ]]; then
   sleep 5
   virsh start "${VM_NAME}" >/dev/null 2>&1 || true
 
-  echo "🎉 HugePages active — VM running with ${TARGET_RAM_GIB}GB RAM (85% host)"
+  echo "🎉 HugePages active — VM running with ${TARGET_RAM_GIB}GB RAM (83% host)"
+
+  
+  # Configure auto restart
+  if [[ -f "$AUTO_RESTART_SCRIPT" ]]; then
+    echo ""
+    echo "🚀 Configuring VM auto-restart..."
+    sudo bash "$AUTO_RESTART_SCRIPT"
+  else
+    echo "No auto restart when vm stopped"
+  fi
+
+  # Configure port forward
+  if [[ -f "$PORT_FORWARD_SCRIPT" ]]; then
+    echo ""
+    echo "🚀 Configuring RDP port forwarding..."
+    sudo bash "$PORT_FORWARD_SCRIPT" "$RDP_PORT"
+  else
+    warn "enable_port_forward_rdp.sh not found in $SCRIPT_DIR. Skipping auto-configuration."
+    echo "Download and run manually when VM is ready."
+  fi
 
   header "Installation Complete!"
   ok "Windows 10 Ltsc installed successfully!"
@@ -1020,7 +1040,7 @@ if [[ "$INSTALL_COMPLETE" == "true" ]]; then
   echo ""
   echo -e "${BLUE}Resource Allocation:${NC}"
   echo "  RAM (install phase): ${RAM_SIZE} MB (~${RAM_PERCENT}% of ${TOTAL_RAM_MB} MB)"
-  echo "  RAM (final hugepages): ${TARGET_RAM_GIB} GB (85% of host)"
+  echo "  RAM (final hugepages): ${TARGET_RAM_GIB} GB (83% of host)"
   echo "  vCPUs: ${VCPU_COUNT} of ${TOTAL_CPUS}"
   echo "  Disk: ${DISK_SIZE} GB"
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# VM Limiter: Instant + Persistent + Autorestart
+# VM Limiter: Instant + Persistent + Autorestart (Revised)
 # ============================================================
 
 set -euo pipefail
@@ -11,11 +11,18 @@ err(){ echo -e "${RED}✗ $1${NC}"; exit 1; }
 header(){ echo -e "\n${GREEN}=== $1 ===${NC}"; }
 
 # ============================================================
+# Root check (paling awal supaya grub/sysctl aman)
+if [[ $(id -u) -ne 0 ]]; then
+  err "Must run as root (sudo bash $0)"
+fi
+
+# ============================================================
 # Configuration (edit these values as needed)
-CPU_LIMIT_PERCENT=85
-RAM_LIMIT_PERCENT=83
-SWAP_LIMIT_PERCENT=100
-MONITOR_INTERVAL=30
+CPU_LIMIT_PERCENT=85     # persen CPU untuk semua VM
+RAM_LIMIT_PERCENT=83     # persen RAM host yang boleh dipakai VM
+SWAP_LIMIT_PERCENT=100   # persen RAM (bukan swap) untuk MemorySwapMax
+MONITOR_INTERVAL=30      # detik
+USE_HUGEPAGES=0          # 0 = OFF (disarankan), 1 = ON
 
 # ============================================================
 header "1. Checking cgroup v2"
@@ -24,16 +31,16 @@ CGROUP_TYPE=$(stat -fc %T /sys/fs/cgroup/ 2>/dev/null || echo "unknown")
 
 if [[ "$CGROUP_TYPE" != "cgroup2fs" ]]; then
   warn "Cgroup v2 not detected! Enabling now..."
-  
+
   cp /etc/default/grub /etc/default/grub.backup
-  
+
   if grep -q "systemd.unified_cgroup_hierarchy=1" /etc/default/grub; then
     ok "Cgroup v2 parameter already in grub"
   else
     sed -i 's/GRUB_CMDLINE_LINUX="\(.*\)"/GRUB_CMDLINE_LINUX="\1 systemd.unified_cgroup_hierarchy=1"/' /etc/default/grub
     ok "Added cgroup v2 to grub config"
   fi
-  
+
   if command -v update-grub >/dev/null 2>&1; then
     update-grub
   elif command -v grub2-mkconfig >/dev/null 2>&1; then
@@ -41,7 +48,7 @@ if [[ "$CGROUP_TYPE" != "cgroup2fs" ]]; then
   else
     err "Cannot find grub update command"
   fi
-  
+
   echo ""
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo "⚠️  REBOOT REQUIRED to enable cgroup v2"
@@ -63,14 +70,26 @@ fi
 
 # ============================================================
 header "2. Installing dependencies"
-[[ $(id -u) -ne 0 ]] && err "Must run as root"
-apt-get update >/dev/null 2>&1
-apt-get install -y bc >/dev/null 2>&1
+
+if command -v apt-get >/dev/null 2>&1; then
+  apt-get update >/dev/null 2>&1
+  # bc + virsh client
+  apt-get install -y bc libvirt-clients >/dev/null 2>&1
+else
+  warn "apt-get not found, please install bc + libvirt-clients manually"
+fi
+
+# pastikan virsh ada
+if ! command -v virsh >/dev/null 2>&1; then
+  err "virsh not found. Install libvirt-clients/libvirt-tools terlebih dahulu."
+fi
+
 systemctl is-active --quiet libvirtd || systemctl enable --now libvirtd
 ok "System ready"
 
 # ============================================================
 header "3. Applying memory tuning"
+
 tee /etc/sysctl.d/99-memory-tuning.conf >/dev/null <<EOF
 vm.swappiness=70
 vm.vfs_cache_pressure=50
@@ -83,6 +102,7 @@ ok "Memory tuning applied (swappiness=70)"
 
 # ============================================================
 header "4. Detecting VMs"
+
 VM_LIST=$(virsh list --all --name | grep -v '^$' || true)
 [[ -z "$VM_LIST" ]] && err "No VMs found"
 VM_COUNT=$(echo "$VM_LIST" | wc -l)
@@ -90,6 +110,7 @@ ok "Found ${VM_COUNT} VM(s): $(echo $VM_LIST | tr '\n' ' ')"
 
 # ============================================================
 header "5. Calculating resources"
+
 CPU_COUNT=$(nproc)
 RAM_TOTAL_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
 RAM_TOTAL_MB=$((RAM_TOTAL_KB/1024))
@@ -97,8 +118,8 @@ RAM_LIMIT_MB=$((RAM_TOTAL_MB*RAM_LIMIT_PERCENT/100))
 RAM_LIMIT_PER_VM_MB=$((RAM_LIMIT_MB/VM_COUNT))
 
 TOTAL_SWAP_KB=$(grep SwapTotal /proc/meminfo | awk '{print $2}')
-if [[ -z "$TOTAL_SWAP_KB" ]] || [[ "$TOTAL_SWAP_KB" -eq 0 ]]; then
-  warn "No swap detected, SWAP limit set to 0"
+if [[ -z "${TOTAL_SWAP_KB}" ]] || [[ "${TOTAL_SWAP_KB}" -eq 0 ]]; then
+  warn "No swap detected, SWAP limit will not be enforced by systemd"
   SWAP_LIMIT_MB=0
 else
   SWAP_LIMIT_MB=$((RAM_TOTAL_MB*SWAP_LIMIT_PERCENT/100))
@@ -118,24 +139,37 @@ if [[ -z "$QEMU_SCOPES" ]]; then
   warn "No active QEMU scopes found - will apply after VM starts"
 else
   SCOPE_COUNT=$(echo "$QEMU_SCOPES" | wc -l)
-  
+
   if [[ "$SCOPE_COUNT" -eq 1 ]]; then
     echo "📌 Single VM - applying direct limit"
     SINGLE_SCOPE=$(echo "$QEMU_SCOPES" | head -n1)
-    systemctl set-property "$SINGLE_SCOPE" \
-      CPUQuota=${CPU_LIMIT_PERCENT}% \
-      MemoryMax=${RAM_LIMIT_MB}M \
-      MemorySwapMax=${SWAP_LIMIT_MB}M 2>/dev/null && \
-      ok "INSTANT limit applied to $SINGLE_SCOPE" || warn "Failed to apply instant limit"
+    if [[ "$SWAP_LIMIT_MB" -gt 0 ]]; then
+      systemctl set-property "$SINGLE_SCOPE" \
+        CPUQuota=${CPU_LIMIT_PERCENT}% \
+        MemoryMax=${RAM_LIMIT_MB}M \
+        MemorySwapMax=${SWAP_LIMIT_MB}M 2>/dev/null && \
+        ok "INSTANT limit applied to $SINGLE_SCOPE" || warn "Failed to apply instant limit"
+    else
+      systemctl set-property "$SINGLE_SCOPE" \
+        CPUQuota=${CPU_LIMIT_PERCENT}% \
+        MemoryMax=${RAM_LIMIT_MB}M 2>/dev/null && \
+        ok "INSTANT limit applied to $SINGLE_SCOPE (no swap limit)" || warn "Failed to apply instant limit"
+    fi
 
   else
     echo "📌 Multiple VMs - applying to machine.slice (dynamic sharing)"
-    systemctl set-property machine.slice \
-      CPUQuota=${CPU_LIMIT_PERCENT}% \
-      MemoryMax=${RAM_LIMIT_MB}M \
-      MemorySwapMax=${SWAP_LIMIT_MB}M 2>/dev/null && \
-      ok "INSTANT limit applied to machine.slice (all VMs share)" || warn "Failed to apply instant limit"
-
+    if [[ "$SWAP_LIMIT_MB" -gt 0 ]]; then
+      systemctl set-property machine.slice \
+        CPUQuota=${CPU_LIMIT_PERCENT}% \
+        MemoryMax=${RAM_LIMIT_MB}M \
+        MemorySwapMax=${SWAP_LIMIT_MB}M 2>/dev/null && \
+        ok "INSTANT limit applied to machine.slice (all VMs share)" || warn "Failed to apply instant limit"
+    else
+      systemctl set-property machine.slice \
+        CPUQuota=${CPU_LIMIT_PERCENT}% \
+        MemoryMax=${RAM_LIMIT_MB}M 2>/dev/null && \
+        ok "INSTANT limit applied to machine.slice (no swap limit)" || warn "Failed to apply instant limit"
+    fi
   fi
 fi
 
@@ -144,7 +178,7 @@ header "7. PERSISTENT LIMIT via libvirt XML (survives reboot)"
 
 for VM in $VM_LIST; do
   echo -e "\n🖥️  Configuring: $VM"
-  
+
   # Make persistent
   if ! virsh dominfo "$VM" 2>/dev/null | grep -q "Persistent:.*yes"; then
     virsh dumpxml "$VM" > "/tmp/${VM}.xml"
@@ -154,59 +188,80 @@ for VM in $VM_LIST; do
 
   # Enable autostart
   virsh autostart "$VM" 2>/dev/null || warn "Autostart failed (may already be set)"
-  
+
   # Update XML with CPU limit
   TMP_XML=$(mktemp)
   virsh dumpxml "$VM" > "$TMP_XML"
-  
+
   CPU_QUOTA=$((CPU_LIMIT_PERCENT * 1000 * CPU_COUNT))
-  
+
   if grep -q "<cputune>" "$TMP_XML"; then
     sed -i "s|<quota>.*</quota>|<quota>${CPU_QUOTA}</quota>|" "$TMP_XML"
     sed -i "s|<period>.*</period>|<period>100000</period>|" "$TMP_XML"
   else
     sed -i "/<domain/a\\  <cputune>\\n    <quota>${CPU_QUOTA}</quota>\\n    <period>100000</period>\\n  </cputune>" "$TMP_XML"
   fi
-  
+
   virsh define "$TMP_XML"
   rm -f "$TMP_XML"
   ok "Persistent CPU limit set"
-  
-  # Set RAM limit
+
+  # Set RAM limit (maxmem + mem)
   RAM_LIMIT_KB=$((RAM_LIMIT_PER_VM_MB * 1024))
-  virsh setmem "$VM" "${RAM_LIMIT_KB}" --config 2>/dev/null && ok "Persistent RAM limit set" || warn "RAM setmem failed"
-  
+  virsh setmaxmem "$VM" "${RAM_LIMIT_KB}" --config 2>/dev/null || true
+  if virsh setmem "$VM" "${RAM_LIMIT_KB}" --config 2>/dev/null; then
+    ok "Persistent RAM limit set"
+  else
+    warn "RAM setmem failed (VM mem mungkin lebih besar dari host limit atau guest sudah jalan)"
+  fi
+
   # Start if not running
   if ! virsh domstate "$VM" 2>/dev/null | grep -q running; then
-    # Prepare HugePages BEFORE starting VM
-    VM_XML_MEM=$(virsh dumpxml "$VM" \
-    | awk -F'[<>]' '/<memory unit='\''KiB'\''>/ {print $3; exit}')
 
-    if [[ -n "$VM_XML_MEM" ]]; then
+    # Optional: HugePages (default OFF via USE_HUGEPAGES)
+    if [[ "$USE_HUGEPAGES" -eq 1 ]]; then
+      VM_XML_MEM=$(virsh dumpxml "$VM" \
+        | awk -F'[<>]' '/<memory unit='\''KiB'\''>/ {print $3; exit}')
+      if [[ -n "$VM_XML_MEM" ]]; then
         PAGES=$(( VM_XML_MEM / 2048 ))
-        echo "$PAGES" > /proc/sys/vm/nr_hugepages
+        echo "$PAGES" > /proc/sys/vm/nr_hugepages || true
         echo "[HugePages] Allocated $PAGES pages (for $VM)" | systemd-cat -t vm-monitor
-    else
+      else
         echo "[HugePages] Unable to read memory for $VM" | systemd-cat -t vm-monitor
+      fi
     fi
 
-    virsh start "$VM" && ok "VM started" || warn "Could not start VM"
+    if virsh start "$VM"; then
+      ok "VM started"
+    else
+      warn "Could not start VM"
+    fi
     sleep 5
 
-    # Optional: free unused HugePages (in-use pages akan tetap kepakai oleh VM)
-    echo 0 > /proc/sys/vm/nr_hugepages || true
+    # Optional: free unused HugePages (in-use pages tetap kepakai)
+    if [[ "$USE_HUGEPAGES" -eq 1 ]]; then
+      echo 0 > /proc/sys/vm/nr_hugepages 2>/dev/null || true
+    fi
 
     # Apply instant limit to newly started VM
     NEW_SCOPE=$(systemctl list-units --type=scope | grep -i "$VM" | awk '{print $1}' | head -n1)
     if [[ -n "$NEW_SCOPE" ]]; then
-      systemctl set-property "$NEW_SCOPE" \
-        CPUQuota=${CPU_LIMIT_PERCENT}% \
-        MemoryMax=${RAM_LIMIT_MB}M \
-        MemorySwapMax=${SWAP_LIMIT_MB}M 2>/dev/null && \
-        ok "Instant limit applied to newly started VM" || true
+      if [[ "$SWAP_LIMIT_MB" -gt 0 ]]; then
+        systemctl set-property "$NEW_SCOPE" \
+          CPUQuota=${CPU_LIMIT_PERCENT}% \
+          MemoryMax=${RAM_LIMIT_MB}M \
+          MemorySwapMax=${SWAP_LIMIT_MB}M 2>/dev/null && \
+          ok "Instant limit applied to newly started VM" || true
+      else
+        systemctl set-property "$NEW_SCOPE" \
+          CPUQuota=${CPU_LIMIT_PERCENT}% \
+          MemoryMax=${RAM_LIMIT_MB}M 2>/dev/null && \
+          ok "Instant limit applied to newly started VM (no swap limit)" || true
+      fi
     fi
   fi
 done
+
 # ============================================================
 header "8. Creating systemd per-VM services"
 
@@ -230,7 +285,7 @@ RestartSec=10
 [Install]
 WantedBy=multi-user.target
 EOF
-  
+
   systemctl daemon-reload
   systemctl enable "libvirt-vm-${VM}.service" 2>/dev/null
 done
@@ -247,37 +302,45 @@ cat > "$MONITOR_SCRIPT" <<EOMONITOR
 CPU_QUOTA=${CPU_LIMIT_PERCENT}
 RAM_LIMIT=${RAM_LIMIT_MB}
 SWAP_LIMIT=${SWAP_LIMIT_MB}
+USE_HUGEPAGES=${USE_HUGEPAGES}
 
 while true; do
   for VM in \$(virsh list --all --name | grep -v '^$'); do
     if virsh dominfo "\$VM" 2>/dev/null | grep -q "Autostart:.*enable"; then
-        if ! virsh domstate "\$VM" 2>/dev/null | grep -q running; then
+      if ! virsh domstate "\$VM" 2>/dev/null | grep -q running; then
         echo "[\$(date)] VM \$VM is down, restarting..." | systemd-cat -t vm-monitor
 
-        # Prepare HugePages based on VM XML memory (if using HugePages)
-        VM_XML_MEM=\$(virsh dumpxml "\$VM" | awk -F'[<>]' '/<memory unit='"'"'KiB'"'"'>/ {print \$3; exit}')
-        if [[ -n "\$VM_XML_MEM" ]]; then
-          PAGES=\$(( VM_XML_MEM / 2048 ))
-          echo "\$PAGES" > /proc/sys/vm/nr_hugepages
-          echo "[\$(date)] [HugePages] Allocated \$PAGES pages for \$VM" | systemd-cat -t vm-monitor
-        else
-          echo "[\$(date)] [HugePages] Unable to read memory for \$VM" | systemd-cat -t vm-monitor
+        if [[ "\$USE_HUGEPAGES" -eq 1 ]]; then
+          VM_XML_MEM=\$(virsh dumpxml "\$VM" | awk -F'[<>]' '/<memory unit='"'"'KiB'"'"'>/ {print \$3; exit}')
+          if [[ -n "\$VM_XML_MEM" ]]; then
+            PAGES=\$(( VM_XML_MEM / 2048 ))
+            echo "\$PAGES" > /proc/sys/vm/nr_hugepages
+            echo "[\$(date)] [HugePages] Allocated \$PAGES pages for \$VM" | systemd-cat -t vm-monitor
+          else
+            echo "[\$(date)] [HugePages] Unable to read memory for \$VM" | systemd-cat -t vm-monitor
+          fi
         fi
 
         virsh start "\$VM" 2>/dev/null
         sleep 5
 
-        # Optional: free unused HugePages (in-use stay pinned)
-        echo 0 > /proc/sys/vm/nr_hugepages 2>/dev/null || true
-        
+        if [[ "\$USE_HUGEPAGES" -eq 1 ]]; then
+          echo 0 > /proc/sys/vm/nr_hugepages 2>/dev/null || true
+        fi
+
         # Reapply instant limit after restart
         SCOPE=\$(systemctl list-units --type=scope | grep -i "\$VM" | awk '{print \$1}' | head -n1)
         if [[ -n "\$SCOPE" ]]; then
-          systemctl set-property "\$SCOPE" \
-            CPUQuota=\${CPU_QUOTA}% \
-            MemoryMax=\${RAM_LIMIT}M \
-            MemorySwapMax=\${SWAP_LIMIT}M 2>/dev/null
-
+          if [[ "\$SWAP_LIMIT" -gt 0 ]]; then
+            systemctl set-property "\$SCOPE" \
+              CPUQuota=\${CPU_QUOTA}% \
+              MemoryMax=\${RAM_LIMIT}M \
+              MemorySwapMax=\${SWAP_LIMIT}M 2>/dev/null
+          else
+            systemctl set-property "\$SCOPE" \
+              CPUQuota=\${CPU_QUOTA}% \
+              MemoryMax=\${RAM_LIMIT}M 2>/dev/null
+          fi
           echo "[\$(date)] Reapplied limits to \$VM" | systemd-cat -t vm-monitor
         fi
       fi
@@ -337,8 +400,8 @@ echo "   • RAM: ${RAM_LIMIT_MB}MB (~${RAM_LIMIT_PERCENT}%)"
 echo "   • SWAP: ${SWAP_LIMIT_MB}MB (~${SWAP_LIMIT_PERCENT}%)"
 echo ""
 echo "⚡ Instant Limits (active NOW):"
-if [[ -n "$QEMU_SCOPES" ]]; then
-  if [[ "$SCOPE_COUNT" -eq 1 ]]; then
+if [[ -n "${QEMU_SCOPES:-}" ]]; then
+  if [[ "${SCOPE_COUNT:-0}" -eq 1 ]]; then
     systemctl show "$SINGLE_SCOPE" 2>/dev/null | grep -E "CPUQuota|MemoryMax|MemorySwapMax" | sed 's/^/   /'
   else
     systemctl show machine.slice 2>/dev/null | grep -E "CPUQuota|MemoryMax|MemorySwapMax" | sed 's/^/   /'
