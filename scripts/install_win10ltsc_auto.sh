@@ -62,6 +62,40 @@ if systemd-detect-virt | grep -qE 'lxc|docker|openvz|container'; then
 fi
 
 # --- Detect System Resources ---
+header "Detecting host resources"
+
+# Total RAM (MB)
+TOTAL_RAM_KB=$(grep -m1 MemTotal /proc/meminfo | awk '{print $2}')
+if [[ -z "${TOTAL_RAM_KB:-}" ]]; then
+  err "Cannot detect total RAM from /proc/meminfo"; cleanup_and_exit
+fi
+TOTAL_RAM_MB=$(( TOTAL_RAM_KB / 1024 ))
+echo "Host RAM   : ${TOTAL_RAM_MB} MB"
+
+# Total CPU cores
+if command -v nproc >/dev/null 2>&1; then
+  TOTAL_CPUS=$(nproc --all)
+else
+  TOTAL_CPUS=$(grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 1)
+fi
+(( TOTAL_CPUS < 1 )) && TOTAL_CPUS=1
+echo "Host vCPUs : ${TOTAL_CPUS}"
+
+# Free disk (GB)
+DISK_PATH="/var/lib/libvirt/images"
+[[ ! -d "$DISK_PATH" ]] && DISK_PATH="/"
+
+FREE_DISK_KB=$(df --output=avail "$DISK_PATH" 2>/dev/null | tail -1 | tr -dc '0-9')
+if [[ -z "${FREE_DISK_KB:-}" ]]; then
+  warn "Cannot detect free disk space; assuming 40GB free"
+  FREE_DISK_GB=40
+else
+  FREE_DISK_GB=$(( FREE_DISK_KB / 1024 / 1024 ))
+fi
+(( FREE_DISK_GB < 5 )) && warn "Only ${FREE_DISK_GB} GB free on ${DISK_PATH}"
+echo "Free disk  : ${FREE_DISK_GB} GB"
+
+
 # --- Ensure 4GB swap exists ---
 header "Ensuring 4GB swap for host"
 
