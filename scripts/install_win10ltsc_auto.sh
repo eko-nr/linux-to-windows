@@ -11,11 +11,6 @@ PORT_FORWARD_SCRIPT="$SCRIPT_DIR/enable_port_forward_rdp.sh"
 AUTO_RESTART_SCRIPT="$SCRIPT_DIR/auto_restart.sh"
 
 set -euo pipefail
-if [[ $(id -u) -ne 0 ]]; then
-  echo "❌ Must run as root: sudo bash $0"
-  exit 1
-fi
-
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 header() { echo -e "\n${GREEN}=== $1 ===${NC}"; }
 step()   { echo -e "${YELLOW}→ $1${NC}"; }
@@ -62,83 +57,14 @@ if systemd-detect-virt | grep -qE 'lxc|docker|openvz|container'; then
 fi
 
 # --- Detect System Resources ---
-header "Detecting host resources"
-
-# Total RAM (MB)
-TOTAL_RAM_KB=$(grep -m1 MemTotal /proc/meminfo | awk '{print $2}')
-if [[ -z "${TOTAL_RAM_KB:-}" ]]; then
-  err "Cannot detect total RAM from /proc/meminfo"; cleanup_and_exit
-fi
-TOTAL_RAM_MB=$(( TOTAL_RAM_KB / 1024 ))
-echo "Host RAM   : ${TOTAL_RAM_MB} MB"
-
-# Total CPU cores
-if command -v nproc >/dev/null 2>&1; then
-  TOTAL_CPUS=$(nproc --all)
-else
-  TOTAL_CPUS=$(grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 1)
-fi
-(( TOTAL_CPUS < 1 )) && TOTAL_CPUS=1
-echo "Host vCPUs : ${TOTAL_CPUS}"
-
-# Free disk (GB)
-DISK_PATH="/var/lib/libvirt/images"
-[[ ! -d "$DISK_PATH" ]] && DISK_PATH="/"
-
-FREE_DISK_KB=$(df --output=avail "$DISK_PATH" 2>/dev/null | tail -1 | tr -dc '0-9')
-if [[ -z "${FREE_DISK_KB:-}" ]]; then
-  warn "Cannot detect free disk space; assuming 40GB free"
-  FREE_DISK_GB=40
-else
-  FREE_DISK_GB=$(( FREE_DISK_KB / 1024 / 1024 ))
-fi
-(( FREE_DISK_GB < 5 )) && warn "Only ${FREE_DISK_GB} GB free on ${DISK_PATH}"
-echo "Free disk  : ${FREE_DISK_GB} GB"
-
-
-# --- Ensure 4GB swap exists ---
-header "Ensuring 4GB swap for host"
-
-SWAP_ACTIVE=$(swapon --show --noheadings | wc -l)
-if (( SWAP_ACTIVE > 0 )); then
-  ok "Swap already active, skipping swapfile creation"
-else
-  if grep -Eqs "^\S+\s+\S+\s+swap\b" /etc/fstab; then
-    warn "Swap entry found in /etc/fstab but not active. Trying to enable it..."
-    if swapon -a 2>/dev/null; then
-      ok "Swap from /etc/fstab activated"
-    else
-      warn "Failed to activate existing swap from /etc/fstab, proceeding to create swapfile"
-    fi
-  fi
-
-  SWAP_ACTIVE=$(swapon --show --noheadings | wc -l)
-  if (( SWAP_ACTIVE == 0 )); then
-    SWAP_FILE="/swapfile"
-    SWAP_SIZE_GB=4
-
-    echo "Creating ${SWAP_SIZE_GB}GB swapfile at ${SWAP_FILE}..."
-    fallocate -l "${SWAP_SIZE_GB}G" "${SWAP_FILE}" 2>/dev/null || \
-      dd if=/dev/zero of="${SWAP_FILE}" bs=1M count=$((SWAP_SIZE_GB*1024)) status=progress
-
-    chmod 600 "${SWAP_FILE}"
-    mkswap "${SWAP_FILE}"
-    swapon "${SWAP_FILE}"
-
-    if ! grep -q "^${SWAP_FILE} " /etc/fstab; then
-      echo "${SWAP_FILE} none swap sw 0 0" >> /etc/fstab
-    fi
-
-    ok "Swapfile ${SWAP_SIZE_GB}GB created and activated"
-  fi
-fi
-
-if ! grep -q "vm.swappiness" /etc/sysctl.d/99-memory-tuning.conf 2>/dev/null; then
-  echo "vm.swappiness=70" >> /etc/sysctl.d/99-memory-tuning.conf
-  sysctl --system >/dev/null 2>&1 || true
-  ok "vm.swappiness set to 70 (host will use swap more willingly)"
-fi
-
+header "Detecting System Resources"
+TOTAL_RAM_MB=$(free -m | awk '/^Mem:/ {print $2}')
+echo "Total Physical RAM: ${TOTAL_RAM_MB} MB"
+TOTAL_CPUS=$(nproc)
+echo "Total CPU Cores: ${TOTAL_CPUS}"
+TOTAL_DISK_GB=$(df -BG / | awk 'NR==2 {print $2}' | sed 's/G//')
+FREE_DISK_GB=$(df -BG / | awk 'NR==2 {print $4}' | sed 's/G//')
+echo "Total Disk Space: ${TOTAL_DISK_GB} GB (Free: ${FREE_DISK_GB} GB)"
 
 # --- Windows User Configuration (PROMPTS KEPT) ---
 header "Windows User Configuration"
@@ -161,8 +87,8 @@ WIN_COMPUTERNAME=${WIN_COMPUTERNAME:-WIN10-LTSC}
 # --- VM Config (AUTO) ---
 header "VM Configuration (AUTO)"
 
-# RAM: 83% total, dengan guard minimal sisa 300MB untuk host
-RAM_CALC=$(( TOTAL_RAM_MB * 83 / 100 ))
+# RAM: 95% total, dengan guard minimal sisa 300MB untuk host
+RAM_CALC=$(( TOTAL_RAM_MB * 95 / 100 ))
 SAFE_CAP=$(( TOTAL_RAM_MB - 300 ))
 (( SAFE_CAP < 300 )) && SAFE_CAP=300
 if (( RAM_CALC > SAFE_CAP )); then
@@ -177,6 +103,12 @@ echo "Allocated RAM (auto): ${RAM_SIZE} MB (~${RAM_PERCENT}% of total)"
 # vCPU: all cores
 VCPU_COUNT=$TOTAL_CPUS
 echo "Allocated vCPUs (auto): ${VCPU_COUNT}"
+
+# Swap: 35% of total RAM (GB), floor, min 1GB
+TOTAL_RAM_GB=$(( (TOTAL_RAM_MB + 1023) / 1024 ))
+SWAP_SIZE=$(( TOTAL_RAM_GB * 45 / 100 ))
+(( SWAP_SIZE < 1 )) && SWAP_SIZE=1
+echo "Allocated Swap (auto): ${SWAP_SIZE} GB (~35% of RAM)"
 
 # --- SAFE ISO SIZE FALLBACKS ---
 ISO_CACHE="/opt/vm-isos"
@@ -199,14 +131,14 @@ ISO_TOTAL_SIZE=$(( ISO_WIN_SIZE_GB + ISO_VIRTIO_SIZE_GB ))
 (( ISO_TOTAL_SIZE < 1 )) && ISO_TOTAL_SIZE=4   # fallback default total 4GB
 echo "Detected ISO total size: ${ISO_TOTAL_SIZE} GB"
 
-# Disk: free disk - iso - 5GB (minimum 20GB)
-if (( FREE_DISK_GB > (ISO_TOTAL_SIZE + 5) )); then
-  DISK_SIZE=$(( FREE_DISK_GB - ISO_TOTAL_SIZE - 5 ))
+# Disk: free disk - swap - iso - 5GB (minimum 20GB)
+if (( FREE_DISK_GB > (SWAP_SIZE + ISO_TOTAL_SIZE + 5) )); then
+  DISK_SIZE=$(( FREE_DISK_GB - SWAP_SIZE - ISO_TOTAL_SIZE - 5 ))
 else
   DISK_SIZE=20
 fi
 (( DISK_SIZE < 20 )) && DISK_SIZE=20
-echo "Allocated Disk (auto): ${DISK_SIZE} GB (free=${FREE_DISK_GB}G, -iso=${ISO_TOTAL_SIZE}G, -host=5G)"
+echo "Allocated Disk (auto): ${DISK_SIZE} GB (free=${FREE_DISK_GB}G, -swap=${SWAP_SIZE}G, -iso=${ISO_TOTAL_SIZE}G, -host=5G)"
 
 # RDP port (PROMPT KEPT)
 echo "🔧 Configure public RDP base port mapping"
@@ -381,6 +313,19 @@ else
   warn "⚠ libvirt not fully functional — installing system version as fallback"
   sudo apt install -y libvirt-daemon-system libvirt-clients
   sudo systemctl enable --now libvirtd virtqemud
+fi
+
+# --- Swap setup (AUTO) ---
+header "Configuring Swap (AUTO)"
+if [[ ! -f /swapfile ]]; then
+  sudo fallocate -l ${SWAP_SIZE}G /swapfile
+  sudo chmod 600 /swapfile
+  sudo mkswap /swapfile
+  sudo swapon /swapfile
+  echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null
+  ok "Swap ${SWAP_SIZE}G created"
+else
+  ok "Swap already exists"
 fi
 
 # --- ISO Cache ---
@@ -680,30 +625,6 @@ cat > "$AUTOUNATTEND_DIR/autounattend.xml" << 'XMLEOF'
           <Description>Install QEMU Guest Agent</Description>
         </SynchronousCommand>
 
-        <SynchronousCommand wcm:action="add">
-          <Order>16</Order>
-          <CommandLine>cmd /c reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v DisableRealtimeMonitoring /t REG_DWORD /d 1 /f</CommandLine>
-          <Description>Disable Defender realtime monitoring</Description>
-        </SynchronousCommand>
-
-        <SynchronousCommand wcm:action="add">
-          <Order>17</Order>
-          <CommandLine>cmd /c reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v DisableBehaviorMonitoring /t REG_DWORD /d 1 /f</CommandLine>
-          <Description>Disable Defender behavior monitoring</Description>
-        </SynchronousCommand>
-
-        <SynchronousCommand wcm:action="add">
-          <Order>18</Order>
-          <CommandLine>cmd /c reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v DisableOnAccessProtection /t REG_DWORD /d 1 /f</CommandLine>
-          <Description>Disable Defender on-access protection</Description>
-        </SynchronousCommand>
-
-        <SynchronousCommand wcm:action="add">
-          <Order>19</Order>
-          <CommandLine>cmd /c reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v DisableScanOnRealtimeEnable /t REG_DWORD /d 1 /f</CommandLine>
-          <Description>Disable scan when realtime enabled</Description>
-        </SynchronousCommand>
-
       </FirstLogonCommands>
       
     </component>
@@ -740,15 +661,15 @@ sudo umount "$FLOPPY_MOUNT" || true
 sudo rmdir "$FLOPPY_MOUNT" 2>/dev/null || true
 ok "Floppy image created: ${FLOPPY_IMG}"
 
-# --- Remove old VM ---
-sudo virsh destroy ${VM_NAME} 2>/dev/null || true
-sudo virsh undefine ${VM_NAME} --nvram --remove-all-storage 2>/dev/null || true
-
 # --- Create Disk ---
 header "Creating VM Disk"
 sudo mkdir -p /var/lib/libvirt/images
 sudo qemu-img create -f qcow2 /var/lib/libvirt/images/${VM_NAME}.img ${DISK_SIZE}G
 ok "Disk ${DISK_SIZE}G ready"
+
+# --- Remove old VM ---
+sudo virsh destroy ${VM_NAME} 2>/dev/null || true
+sudo virsh undefine ${VM_NAME} --nvram --remove-all-storage 2>/dev/null || true
 
 # --- Fix AppArmor issue ---
 header "Fixing AppArmor configuration"
@@ -939,7 +860,7 @@ echo ""
 REBOOT_DETECTED=false
 INSTALL_COMPLETE=false
 CHECK_COUNT=0
-MAX_CHECKS=2160
+MAX_CHECKS=180  # 30 minutes max
 
 while (( CHECK_COUNT < MAX_CHECKS )); do
   CHECK_COUNT=$((CHECK_COUNT + 1))
@@ -1055,186 +976,66 @@ else
 fi
 
 echo ""
-if true; then
+if [[ "$INSTALL_COMPLETE" == "true" ]]; then
+  header "Installation Complete!"
+  ok "Windows 10 Ltsc installed successfully!"
   echo ""
-  echo "🔧 Applying HugePages + RAM limit (target 83% host, 100% backed by HugePages)..."
-
-  HUGEPAGE_KIB=2048  # 2 MiB
-
-  # Target: 83% dari RAM host (minimum 4GB)
-  TARGET_RAM_MB=$(( TOTAL_RAM_MB * 83 / 100 ))
-  [[ $TARGET_RAM_MB -lt 4096 ]] && TARGET_RAM_MB=4096
-
-  TARGET_RAM_KIB=$(( TARGET_RAM_MB * 1024 ))
-  # berapa halaman 2MiB yang dibutuhkan untuk target RAM ini
-  TARGET_PAGES=$(( TARGET_RAM_KIB / HUGEPAGE_KIB ))
-
-  echo "→ Target VM RAM (theoretical): ${TARGET_RAM_MB} MB (~83% of host)"
-  echo "→ Requesting HugePages: ${TARGET_PAGES} x 2MB pages"
-
-  echo "⏸️  Stopping VM before applying HugePages..."
-  virsh destroy "${VM_NAME}" >/dev/null 2>&1 || true
-  sleep 2
-
-  echo "🧹 Resetting previous HugePages on host..."
-  echo 0 > /proc/sys/vm/nr_hugepages
-  sync
-  echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
-  sleep 1
-
-  if ! echo "${TARGET_PAGES}" > /proc/sys/vm/nr_hugepages 2>/dev/null; then
-    echo "❌ Failed to set nr_hugepages=${TARGET_PAGES}"
-    echo "   Starting VM WITHOUT HugePages (host cannot satisfy request)."
-    virsh start "${VM_NAME}" >/dev/null 2>&1 || true
-
-    header "Installation Complete!"
-    ok "Windows 10 Ltsc installed (no HugePages)."
-    echo ""
-    echo -e "${BLUE}VM Details:${NC}"
-    echo "  Name: ${VM_NAME}"
-    echo "  Computer Name: ${WIN_COMPUTERNAME}"
-    echo "  Username: ${WIN_USERNAME}"
-    echo "  Password: [hidden]"
-    echo "  IP Address: ${VM_IP:-unknown}"
-    echo ""
-    echo -e "${GREEN}✅ Auto-configured features:${NC}"
-    echo "  ✓ VirtIO storage & network drivers"
-    echo "  ✓ Remote Desktop (RDP) enabled"
-    echo "  ✓ Windows Firewall disabled"
-    echo "  ✓ Network configured automatically"
-    echo ""
-    echo -e "${BLUE}Resource Allocation:${NC}"
-    echo "  RAM (install phase): ${RAM_SIZE} MB (~${RAM_PERCENT}% of ${TOTAL_RAM_MB} MB)"
-    echo "  RAM (final): ${RAM_SIZE} MB (HugePages OFF)"
-    echo "  vCPUs: ${VCPU_COUNT} of ${TOTAL_CPUS}"
-    echo "  Disk: ${DISK_SIZE} GB"
-  else
-    echo "✓ HugePages allocation requested on host"
-    grep HugePages_ /proc/meminfo || true
-
-    ACTUAL_PAGES=$(grep HugePages_Total /proc/meminfo | awk '{print $2}')
-    [[ -z "${ACTUAL_PAGES}" ]] && ACTUAL_PAGES=0
-
-    if (( ACTUAL_PAGES <= 0 )); then
-      echo "❌ Host failed to allocate any HugePages. Starting VM WITHOUT HugePages."
-      virsh start "${VM_NAME}" >/dev/null 2>&1 || true
-
-      header "Installation Complete!"
-      ok "Windows 10 Ltsc installed (no HugePages)."
-      echo ""
-      echo -e "${BLUE}VM Details:${NC}"
-      echo "  Name: ${VM_NAME}"
-      echo "  Computer Name: ${WIN_COMPUTERNAME}"
-      echo "  Username: ${WIN_USERNAME}"
-      echo "  Password: [hidden]"
-      echo "  IP Address: ${VM_IP:-unknown}"
-      echo ""
-      echo -e "${GREEN}✅ Auto-configured features:${NC}"
-      echo "  ✓ VirtIO storage & network drivers"
-      echo "  ✓ Remote Desktop (RDP) enabled"
-      echo "  ✓ Windows Firewall disabled"
-      echo "  ✓ Network configured automatically"
-      echo ""
-      echo -e "${BLUE}Resource Allocation:${NC}"
-      echo "  RAM (install phase): ${RAM_SIZE} MB (~${RAM_PERCENT}% of ${TOTAL_RAM_MB} MB)"
-      echo "  RAM (final): ${RAM_SIZE} MB (HugePages OFF)"
-      echo "  vCPUs: ${VCPU_COUNT} of ${TOTAL_CPUS}"
-      echo "  Disk: ${DISK_SIZE} GB"
-    else
-      if (( ACTUAL_PAGES < TARGET_PAGES )); then
-        echo "⚠ Requested ${TARGET_PAGES} pages, but host only allocated ${ACTUAL_PAGES} pages."
-        echo "  VM RAM will be SHRUNK to fully match HugePages (100% backed)."
-        TARGET_PAGES=${ACTUAL_PAGES}
-      fi
-
-      TARGET_RAM_KIB=$(( TARGET_PAGES * HUGEPAGE_KIB ))
-      TARGET_RAM_MB=$(( TARGET_RAM_KIB / 1024 ))
-      TARGET_RAM_GIB=$(( TARGET_RAM_MB / 1024 ))
-
-      PCT_HOST=$(( TARGET_RAM_MB * 100 / TOTAL_RAM_MB ))
-
-      echo "→ Final VM RAM (based on HugePages): ${TARGET_RAM_MB} MB (~${TARGET_RAM_GIB} GB, ~${PCT_HOST}% of host)"
-      echo "→ memory/currentMemory will be set to: ${TARGET_RAM_KIB} KiB"
-
-      XML_TMP=$(mktemp)
-      virsh dumpxml "${VM_NAME}" > "${XML_TMP}"
-
-      # Bersihkan memoryBacking lama dulu
-      sed -i '/<memoryBacking>/,/<\/memoryBacking>/d' "${XML_TMP}"
-
-      # Inject memoryBacking baru dengan HugePages 2MiB
-      sed -i "/<currentMemory unit='KiB'>/a\
-  <memoryBacking>\n\
-    <hugepages>\n\
-      <page size='2' unit='MiB'/>\n\
-    </hugepages>\n\
-  </memoryBacking>" "${XML_TMP}"
-
-      echo "==== DEBUG: memoryBacking in XML_TMP ===="
-      grep -n "memoryBacking" "${XML_TMP}" || echo "NO memoryBacking in XML_TMP"
-      echo "========================================="
-
-      # Set <memory> & <currentMemory> ke RAM final
-      sed -i "s|\(<memory unit='KiB'>\)[0-9]\+\(</memory>\)|\1${TARGET_RAM_KIB}\2|" "${XML_TMP}"
-      sed -i "s|\(<currentMemory unit='KiB'>\)[0-9]\+\(</currentMemory>\)|\1${TARGET_RAM_KIB}\2|" "${XML_TMP}"
-
-      if virsh define "${XML_TMP}"; then
-        echo "✓ XML updated → VM now uses HugePages + ${TARGET_RAM_MB}MB (~${TARGET_RAM_GIB}GB)"
-      else
-        echo "❌ virsh define failed, check ${XML_TMP}"
-      fi
-      rm -f "${XML_TMP}"
-
-      echo "🚀 Starting VM with HugePages..."
-      virsh start "${VM_NAME}" >/dev/null 2>&1 || true
-      sleep 5
-
-      echo "🎉 HugePages active — VM running with ${TARGET_RAM_MB}MB (~${TARGET_RAM_GIB}GB, ~${PCT_HOST}% of host, fully backed)"
-
-      # Configure port forward
-      if [[ -f "$PORT_FORWARD_SCRIPT" ]]; then
-        echo ""
-        echo "🚀 Configuring RDP port forwarding..."
-        sudo bash "$PORT_FORWARD_SCRIPT" "$RDP_PORT"
-      else
-        warn "enable_port_forward_rdp.sh not found in $SCRIPT_DIR. Skipping auto-configuration."
-        echo "Download and run manually when VM is ready."
-      fi
-
-      header "Installation Complete!"
-      ok "Windows 10 Ltsc installed successfully!"
-      echo ""
-      echo -e "${BLUE}VM Details:${NC}"
-      echo "  Name: ${VM_NAME}"
-      echo "  Computer Name: ${WIN_COMPUTERNAME}"
-      echo "  Username: ${WIN_USERNAME}"
-      echo "  Password: [hidden]"
-      echo "  IP Address: ${VM_IP:-unknown}"
-      echo ""
-      echo -e "${GREEN}✅ Auto-configured features:${NC}"
-      echo "  ✓ VirtIO storage & network drivers"
-      echo "  ✓ Remote Desktop (RDP) enabled"
-      echo "  ✓ Windows Firewall disabled"
-      echo "  ✓ Network configured automatically"
-      echo ""
-      echo -e "${BLUE}Resource Allocation:${NC}"
-      echo "  RAM (install phase): ${RAM_SIZE} MB (~${RAM_PERCENT}% of ${TOTAL_RAM_MB} MB)"
-      echo "  RAM (final hugepages): ${TARGET_RAM_MB} MB (~${TARGET_RAM_GIB} GB, ~${PCT_HOST}% of host, 100% backed)"
-      echo "  vCPUs: ${VCPU_COUNT} of ${TOTAL_CPUS}"
-      echo "  Disk: ${DISK_SIZE} GB"
-    fi
-  fi
-
+  echo -e "${BLUE}VM Details:${NC}"
+  echo "  Name: ${VM_NAME}"
+  echo "  Computer Name: ${WIN_COMPUTERNAME}"
+  echo "  Username: ${WIN_USERNAME}"
+  echo "  Password: [hidden]"
+  echo "  IP Address: ${VM_IP:-unknown}"
+  echo ""
+  echo -e "${GREEN}✅ Auto-configured features:${NC}"
+  echo "  ✓ VirtIO storage & network drivers"
+  echo "  ✓ Remote Desktop (RDP) enabled"
+  echo "  ✓ Windows Firewall disabled"
+  echo "  ✓ Network configured automatically"
 else
   warn "Installation monitoring timed out after $(( MAX_CHECKS * 10 / 60 )) minutes"
   echo ""
   echo "Please check VM status manually:"
   echo "  sudo virsh list --all"
   echo "  sudo virsh domifaddr ${VM_NAME}"
+fi
 
+echo ""
+echo -e "${BLUE}Resource Allocation:${NC}"
+echo "  RAM: ${RAM_SIZE} MB (~${RAM_PERCENT}% of ${TOTAL_RAM_MB} MB)"
+echo "  vCPUs: ${VCPU_COUNT} of ${TOTAL_CPUS}"
+echo "  Disk: ${DISK_SIZE} GB"
+echo "  Swap: ${SWAP_SIZE} GB"
+echo ""
+echo -e "${BLUE}Performance Features:${NC}"
+echo "  ✓ KVM hardware virtualization"
+echo "  ✓ VirtIO drivers (network + storage)"
+echo "  ✓ Host CPU passthrough"
+echo "  ✓ vhost-net acceleration + multiqueue (${VCPU_COUNT})"
+echo "  ✓ Hyper-V enlightenments"
+echo ""
+echo -e "${BLUE}Cached Files:${NC}"
+echo "  Windows ISO: ${ISO_FILE}"
+echo "  VirtIO Drivers: ${VIRTIO_FILE}"
+echo "  Autounattend Floppy: ${FLOPPY_IMG}"
+echo ""
+ok "Setup complete! VM is ready to use."
+
+# Configure auto restart
+if [[ -f "$AUTO_RESTART_SCRIPT" ]]; then
   echo ""
-  echo -e "${BLUE}Resource Allocation:${NC}"
-  echo "  RAM (install phase): ${RAM_SIZE} MB (~${RAM_PERCENT}% of ${TOTAL_RAM_MB} MB)"
-  echo "  vCPUs: ${VCPU_COUNT} of ${TOTAL_CPUS}"
-  echo "  Disk: ${DISK_SIZE} GB"
+  echo "🚀 Configuring VM auto-restart..."
+  sudo bash "$AUTO_RESTART_SCRIPT"
+else
+  echo "No auto restart when vm stopped"
+fi
+
+# Configure port forward
+if [[ -f "$PORT_FORWARD_SCRIPT" ]]; then
+  echo ""
+  echo "🚀 Configuring RDP port forwarding..."
+  sudo bash "$PORT_FORWARD_SCRIPT" "$RDP_PORT"
+else
+  warn "enable_port_forward_rdp.sh not found in $SCRIPT_DIR. Skipping auto-configuration."
+  echo "Download and run manually when VM is ready."
 fi
