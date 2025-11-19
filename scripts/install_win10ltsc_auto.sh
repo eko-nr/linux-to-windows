@@ -625,6 +625,30 @@ cat > "$AUTOUNATTEND_DIR/autounattend.xml" << 'XMLEOF'
           <Description>Install QEMU Guest Agent</Description>
         </SynchronousCommand>
 
+        <SynchronousCommand wcm:action="add">
+          <Order>16</Order>
+          <CommandLine>cmd /c reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v DisableRealtimeMonitoring /t REG_DWORD /d 1 /f</CommandLine>
+          <Description>Disable Defender realtime monitoring</Description>
+        </SynchronousCommand>
+
+        <SynchronousCommand wcm:action="add">
+          <Order>17</Order>
+          <CommandLine>cmd /c reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v DisableBehaviorMonitoring /t REG_DWORD /d 1 /f</CommandLine>
+          <Description>Disable Defender behavior monitoring</Description>
+        </SynchronousCommand>
+
+        <SynchronousCommand wcm:action="add">
+          <Order>18</Order>
+          <CommandLine>cmd /c reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v DisableOnAccessProtection /t REG_DWORD /d 1 /f</CommandLine>
+          <Description>Disable Defender on-access protection</Description>
+        </SynchronousCommand>
+
+        <SynchronousCommand wcm:action="add">
+          <Order>19</Order>
+          <CommandLine>cmd /c reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v DisableScanOnRealtimeEnable /t REG_DWORD /d 1 /f</CommandLine>
+          <Description>Disable scan when realtime enabled</Description>
+        </SynchronousCommand>
+
       </FirstLogonCommands>
       
     </component>
