@@ -18,7 +18,7 @@ header(){ echo -e "\n${GREEN}=== $1 ===${NC}"; }
 
 # ------------------------------------------------------------
 # Configuration (edit these values as needed)
-CPU_LIMIT_PERCENT=85       # CPU quota for all VMs
+CPU_LIMIT_PERCENT=85       # Target: % dari total CPU host yg boleh dipakai VMs
 RAM_LIMIT_PERCENT=83       # Max RAM used by all VMs (% of host)
 SWAP_LIMIT_PERCENT=100     # Max SWAP used by all VMs (% of host RAM)
 MONITOR_INTERVAL=30        # Seconds between monitor checks
@@ -135,10 +135,13 @@ else
   SWAP_LIMIT_MB=$((RAM_TOTAL_MB*SWAP_LIMIT_PERCENT/100))
 fi
 
-CPU_QUOTA_PERCENT=${CPU_LIMIT_PERCENT}
+# --- penting: CPUQuota di systemd adalah % dari 1 core ---
+# Biar VMs bisa pakai CPU_LIMIT_PERCENT% dari total host:
+# CPUQuota = CPU_LIMIT_PERCENT * jumlah core
+CPU_QUOTA_PERCENT=$((CPU_LIMIT_PERCENT * CPU_COUNT))
 
 ok "Host resources: ${CPU_COUNT} cores, ${RAM_TOTAL_MB} MB RAM"
-ok "VM limits: ~${RAM_LIMIT_PER_VM_MB} MB RAM per VM, ${CPU_LIMIT_PERCENT}% CPU (shared)"
+ok "VM limits: ~${RAM_LIMIT_PER_VM_MB} MB RAM per VM, ~${CPU_LIMIT_PERCENT}% of host CPU (shared)"
 
 # ============================================================
 header "6. Applying INSTANT limits via systemd (live)"
@@ -155,7 +158,7 @@ else
     echo "📌 Single VM scope detected - applying limits directly"
     SINGLE_SCOPE=$(echo "$QEMU_SCOPES" | head -n1)
     if systemctl set-property "$SINGLE_SCOPE" \
-      CPUQuota=${CPU_LIMIT_PERCENT}% \
+      CPUQuota=${CPU_QUOTA_PERCENT}% \
       MemoryMax=${RAM_LIMIT_MB}M \
       MemorySwapMax=${SWAP_LIMIT_MB}M 2>/dev/null; then
       ok "Instant limits applied to $SINGLE_SCOPE"
@@ -165,7 +168,7 @@ else
   else
     echo "📌 Multiple VMs detected - applying limits to machine.slice (shared)"
     if systemctl set-property machine.slice \
-      CPUQuota=${CPU_LIMIT_PERCENT}% \
+      CPUQuota=${CPU_QUOTA_PERCENT}% \
       MemoryMax=${RAM_LIMIT_MB}M \
       MemorySwapMax=${SWAP_LIMIT_MB}M 2>/dev/null; then
       ok "Instant limits applied to machine.slice (all VMs share resource pool)"
@@ -195,6 +198,7 @@ for VM in $VM_LIST; do
   TMP_XML=$(mktemp)
   virsh dumpxml "$VM" > "$TMP_XML"
 
+  # libvirt: quota dalam microseconds per period, di-share across cores
   CPU_QUOTA=$((CPU_LIMIT_PERCENT * 1000 * CPU_COUNT))
 
   if grep -q "<cputune>" "$TMP_XML"; then
@@ -231,7 +235,7 @@ for VM in $VM_LIST; do
       NEW_SCOPE=$(systemctl list-units --type=scope | grep -i "$VM" | awk '{print $1}' | head -n1)
       if [[ -n "$NEW_SCOPE" ]]; then
         systemctl set-property "$NEW_SCOPE" \
-          CPUQuota=${CPU_LIMIT_PERCENT}% \
+          CPUQuota=${CPU_QUOTA_PERCENT}% \
           MemoryMax=${RAM_LIMIT_MB}M \
           MemorySwapMax=${SWAP_LIMIT_MB}M 2>/dev/null && \
           ok "Instant limits applied to newly started VM $VM" || \
@@ -284,7 +288,7 @@ cat > "$MONITOR_SCRIPT" <<EOMONITOR
 # - Re-applies systemd CPU/RAM/SWAP limits
 # - Ensures HugePages remain disabled
 
-CPU_QUOTA=${CPU_LIMIT_PERCENT}
+CPU_QUOTA=${CPU_QUOTA_PERCENT}
 RAM_LIMIT=${RAM_LIMIT_MB}
 SWAP_LIMIT=${SWAP_LIMIT_MB}
 INTERVAL=${MONITOR_INTERVAL}
@@ -312,9 +316,9 @@ while true; do
         # Reapply instant limit after restart
         SCOPE=\$(systemctl list-units --type=scope | grep -i "\$VM" | awk '{print \$1}' | head -n1)
         if [[ -n "\$SCOPE" ]]; then
-          systemctl set-property "\$SCOPE" \
-            CPUQuota=\${CPU_QUOTA}% \
-            MemoryMax=\${RAM_LIMIT}M \
+          systemctl set-property "\$SCOPE" \\
+            CPUQuota=\${CPU_QUOTA}% \\
+            MemoryMax=\${RAM_LIMIT}M \\
             MemorySwapMax=\${SWAP_LIMIT}M 2>/dev/null
 
           echo "[\$(date)] Reapplied limits to \$VM (\$SCOPE)" | systemd-cat -t vm-monitor
@@ -373,7 +377,7 @@ header "✅ CONFIGURATION COMPLETE"
 
 echo ""
 echo "📊 Applied Limits:"
-echo "   • CPU:  ${CPU_LIMIT_PERCENT}% (systemd CPUQuota)"
+echo "   • CPU:  ~${CPU_LIMIT_PERCENT}% of host (systemd CPUQuota=${CPU_QUOTA_PERCENT}%)"
 echo "   • RAM:  ${RAM_LIMIT_MB} MB (~${RAM_LIMIT_PERCENT}% of host)"
 echo "   • SWAP: ${SWAP_LIMIT_MB} MB (~${SWAP_LIMIT_PERCENT}% of host RAM)"
 echo ""
