@@ -98,7 +98,7 @@ RAM_PERCENT_AUTO=$(( RAM_AUTO * 100 / TOTAL_RAM_MB ))
 
 read -p "RAM size in MB [auto: ${RAM_AUTO} MB ~${RAM_PERCENT_AUTO}% of ${TOTAL_RAM_MB} MB]: " RAM_INPUT
 if [[ -n "$RAM_INPUT" ]]; then
-  if ! [[ "$RAM_INPUT" =~ ^[0-9]+$ ]] || (( RAM_INPUT < 1024 )); then
+  if ! [[ "$RAM_INPUT" =~ ^[0-9]+$ ]] || (( RAM_INPUT < 512 )); then
     warn "Invalid input, using auto: ${RAM_AUTO} MB"
     RAM_SIZE=$RAM_AUTO
   elif (( RAM_INPUT > TOTAL_RAM_MB - 300 )); then
@@ -110,10 +110,6 @@ if [[ -n "$RAM_INPUT" ]]; then
 else
   RAM_SIZE=$RAM_AUTO
 fi
-read -p "RAM size in MB [auto: ${RAM_AUTO} MB]: " RAM_INPUT
-echo "DEBUG: RAM_INPUT='${RAM_INPUT}'"
-echo "DEBUG: length=${#RAM_INPUT}"
-echo "DEBUG: hex=$(echo -n "$RAM_INPUT" | xxd | head -1)"
 RAM_PERCENT=$(( RAM_SIZE * 100 / TOTAL_RAM_MB ))
 echo "→ RAM: ${RAM_SIZE} MB (~${RAM_PERCENT}% of ${TOTAL_RAM_MB} MB)"
 
