@@ -110,6 +110,10 @@ if [[ -n "$RAM_INPUT" ]]; then
 else
   RAM_SIZE=$RAM_AUTO
 fi
+read -p "RAM size in MB [auto: ${RAM_AUTO} MB]: " RAM_INPUT
+echo "DEBUG: RAM_INPUT='${RAM_INPUT}'"
+echo "DEBUG: length=${#RAM_INPUT}"
+echo "DEBUG: hex=$(echo -n "$RAM_INPUT" | xxd | head -1)"
 RAM_PERCENT=$(( RAM_SIZE * 100 / TOTAL_RAM_MB ))
 echo "→ RAM: ${RAM_SIZE} MB (~${RAM_PERCENT}% of ${TOTAL_RAM_MB} MB)"
 
