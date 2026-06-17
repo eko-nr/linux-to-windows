@@ -84,31 +84,69 @@ done
 read -p "Computer name [WIN10-tiny]: " WIN_COMPUTERNAME
 WIN_COMPUTERNAME=${WIN_COMPUTERNAME:-WIN10-tiny}
 
-# --- VM Config (AUTO) ---
-header "VM Configuration (AUTO)"
+# --- VM Config (CUSTOM atau AUTO) ---
+header "VM Configuration"
+echo -e "${BLUE}Press Enter to use auto-calculated values, or type custom value:${NC}"
 
-# RAM: 95% total, dengan guard minimal sisa 300MB untuk host
+# RAM
 RAM_CALC=$(( TOTAL_RAM_MB * 95 / 100 ))
 SAFE_CAP=$(( TOTAL_RAM_MB - 300 ))
 (( SAFE_CAP < 300 )) && SAFE_CAP=300
-if (( RAM_CALC > SAFE_CAP )); then
-  RAM_SIZE=$SAFE_CAP
+(( RAM_CALC > SAFE_CAP )) && RAM_AUTO=$SAFE_CAP || RAM_AUTO=$RAM_CALC
+(( RAM_AUTO < 2048 )) && RAM_AUTO=2048
+RAM_PERCENT_AUTO=$(( RAM_AUTO * 100 / TOTAL_RAM_MB ))
+
+read -p "RAM size in MB [auto: ${RAM_AUTO} MB ~${RAM_PERCENT_AUTO}% of ${TOTAL_RAM_MB} MB]: " RAM_INPUT
+if [[ -n "$RAM_INPUT" ]]; then
+  if ! [[ "$RAM_INPUT" =~ ^[0-9]+$ ]] || (( RAM_INPUT < 1024 )); then
+    warn "Invalid input, using auto: ${RAM_AUTO} MB"
+    RAM_SIZE=$RAM_AUTO
+  elif (( RAM_INPUT > TOTAL_RAM_MB - 300 )); then
+    warn "Too large, capping at $(( TOTAL_RAM_MB - 300 )) MB"
+    RAM_SIZE=$(( TOTAL_RAM_MB - 300 ))
+  else
+    RAM_SIZE=$RAM_INPUT
+  fi
 else
-  RAM_SIZE=$RAM_CALC
+  RAM_SIZE=$RAM_AUTO
 fi
-(( RAM_SIZE < 2048 )) && RAM_SIZE=2048
 RAM_PERCENT=$(( RAM_SIZE * 100 / TOTAL_RAM_MB ))
-echo "Allocated RAM (auto): ${RAM_SIZE} MB (~${RAM_PERCENT}% of total)"
+echo "→ RAM: ${RAM_SIZE} MB (~${RAM_PERCENT}% of ${TOTAL_RAM_MB} MB)"
 
-# vCPU: all cores
-VCPU_COUNT=$TOTAL_CPUS
-echo "Allocated vCPUs (auto): ${VCPU_COUNT}"
+# vCPU
+VCPU_AUTO=$TOTAL_CPUS
+read -p "vCPU count [auto: ${VCPU_AUTO} (all cores)]: " VCPU_INPUT
+if [[ -n "$VCPU_INPUT" ]]; then
+  if ! [[ "$VCPU_INPUT" =~ ^[0-9]+$ ]] || (( VCPU_INPUT < 1 )); then
+    warn "Invalid input, using auto: ${VCPU_AUTO}"
+    VCPU_COUNT=$VCPU_AUTO
+  elif (( VCPU_INPUT > TOTAL_CPUS )); then
+    warn "Exceeds physical cores (${TOTAL_CPUS}), capping"
+    VCPU_COUNT=$TOTAL_CPUS
+  else
+    VCPU_COUNT=$VCPU_INPUT
+  fi
+else
+  VCPU_COUNT=$VCPU_AUTO
+fi
+echo "→ vCPUs: ${VCPU_COUNT}"
 
-# Swap: 35% of total RAM (GB), floor, min 1GB
+# Swap
 TOTAL_RAM_GB=$(( (TOTAL_RAM_MB + 1023) / 1024 ))
-SWAP_SIZE=$(( TOTAL_RAM_GB * 45 / 100 ))
-(( SWAP_SIZE < 1 )) && SWAP_SIZE=1
-echo "Allocated Swap (auto): ${SWAP_SIZE} GB (~35% of RAM)"
+SWAP_AUTO=$(( TOTAL_RAM_GB * 45 / 100 ))
+(( SWAP_AUTO < 1 )) && SWAP_AUTO=1
+read -p "Swap size in GB [auto: ${SWAP_AUTO} GB]: " SWAP_INPUT
+if [[ -n "$SWAP_INPUT" ]]; then
+  if ! [[ "$SWAP_INPUT" =~ ^[0-9]+$ ]] || (( SWAP_INPUT < 1 )); then
+    warn "Invalid input, using auto: ${SWAP_AUTO} GB"
+    SWAP_SIZE=$SWAP_AUTO
+  else
+    SWAP_SIZE=$SWAP_INPUT
+  fi
+else
+  SWAP_SIZE=$SWAP_AUTO
+fi
+echo "→ Swap: ${SWAP_SIZE} GB"
 
 # --- SAFE ISO SIZE FALLBACKS ---
 ISO_CACHE="/opt/vm-isos"
@@ -128,17 +166,31 @@ ISO_VIRTIO_SIZE_GB=$(stat -c%s "$VIRTIO_FILE" 2>/dev/null || echo 0)
 ISO_VIRTIO_SIZE_GB=$(( ISO_VIRTIO_SIZE_GB / 1073741824 ))
 
 ISO_TOTAL_SIZE=$(( ISO_WIN_SIZE_GB + ISO_VIRTIO_SIZE_GB ))
-(( ISO_TOTAL_SIZE < 1 )) && ISO_TOTAL_SIZE=4   # fallback default total 4GB
+(( ISO_TOTAL_SIZE < 1 )) && ISO_TOTAL_SIZE=4
 echo "Detected ISO total size: ${ISO_TOTAL_SIZE} GB"
 
-# Disk: free disk - swap - iso - 5GB (minimum 20GB)
+# Disk
 if (( FREE_DISK_GB > (SWAP_SIZE + ISO_TOTAL_SIZE + 5) )); then
-  DISK_SIZE=$(( FREE_DISK_GB - SWAP_SIZE - ISO_TOTAL_SIZE - 5 ))
+  DISK_AUTO=$(( FREE_DISK_GB - SWAP_SIZE - ISO_TOTAL_SIZE - 5 ))
 else
-  DISK_SIZE=20
+  DISK_AUTO=20
 fi
-(( DISK_SIZE < 20 )) && DISK_SIZE=20
-echo "Allocated Disk (auto): ${DISK_SIZE} GB (free=${FREE_DISK_GB}G, -swap=${SWAP_SIZE}G, -iso=${ISO_TOTAL_SIZE}G, -host=5G)"
+(( DISK_AUTO < 20 )) && DISK_AUTO=20
+read -p "Disk size in GB [auto: ${DISK_AUTO} GB (free=${FREE_DISK_GB}G, -swap=${SWAP_SIZE}G, -iso=${ISO_TOTAL_SIZE}G, -host=5G)]: " DISK_INPUT
+if [[ -n "$DISK_INPUT" ]]; then
+  if ! [[ "$DISK_INPUT" =~ ^[0-9]+$ ]] || (( DISK_INPUT < 20 )); then
+    warn "Minimum 20 GB required, using auto: ${DISK_AUTO} GB"
+    DISK_SIZE=$DISK_AUTO
+  elif (( DISK_INPUT > FREE_DISK_GB - SWAP_SIZE - 5 )); then
+    warn "Not enough free space, using auto: ${DISK_AUTO} GB"
+    DISK_SIZE=$DISK_AUTO
+  else
+    DISK_SIZE=$DISK_INPUT
+  fi
+else
+  DISK_SIZE=$DISK_AUTO
+fi
+echo "→ Disk: ${DISK_SIZE} GB"
 
 # RDP port (PROMPT KEPT)
 echo "🔧 Configure public RDP base port mapping"
