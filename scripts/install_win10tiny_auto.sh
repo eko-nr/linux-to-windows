@@ -4,11 +4,31 @@
 # Full automation with reboot handling (FIXED windowsPE parsing)
 # AUTO VERSION: RAM/CPU/DISK/SWAP computed automatically
 # ============================================================
+VM_NAME=${1:-}  # line 8, simpan dulu argumen CLI
 
-VM_NAME=${1:-win10tiny}
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PORT_FORWARD_SCRIPT="$SCRIPT_DIR/enable_port_forward_rdp.sh"
 AUTO_RESTART_SCRIPT="$SCRIPT_DIR/auto_restart.sh"
+
+set -euo pipefail
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
+header() { echo -e "\n${GREEN}=== $1 ===${NC}"; }
+step()   { echo -e "${YELLOW}→ $1${NC}"; }
+ok()     { echo -e "${GREEN}✓ $1${NC}"; }
+warn()   { echo -e "${YELLOW}⚠ $1${NC}"; }
+err()    { echo -e "${RED}✗ $1${NC}"; }
+cleanup_and_exit() { echo -e "${RED}❌ Cleaning up and exiting...${NC}"; exit 1; }
+
+# --- Prompt VM Name jika tidak ada argumen ---
+if [[ -z "$VM_NAME" ]]; then
+  read -p "VM Name [win10tiny]: " VM_NAME_INPUT
+  VM_NAME=${VM_NAME_INPUT:-win10tiny}
+  VM_NAME=$(echo "$VM_NAME" | tr -cd '[:alnum:]-_')
+  if [[ -z "$VM_NAME" ]]; then
+    warn "Invalid VM name, using default: win10tiny"
+    VM_NAME=win10tiny
+  fi
+fi
 
 set -euo pipefail
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
